@@ -19,11 +19,15 @@ struct HistoryPanelView: View {
             VStack(spacing: 0) {
                 toolbarStrip
 
-                Divider().opacity(0.55)
+                Divider()
+                    .opacity(0.45)
+                    .padding(.horizontal, 8)
 
                 content
 
-                Divider().opacity(0.55)
+                Divider()
+                    .opacity(0.45)
+                    .padding(.horizontal, 8)
 
                 footerBar
             }
@@ -44,18 +48,23 @@ struct HistoryPanelView: View {
             }
         }
         .frame(minWidth: HisCopyStyle.panelMinWidth, minHeight: HisCopyStyle.panelMinHeight)
-        .background(.ultraThinMaterial)
-        .opacity(appeared ? 1 : 0.92)
-        .scaleEffect(appeared ? 1 : 0.985)
-        .onAppear {
-            withAnimation(.easeOut(duration: 0.18)) {
-                appeared = true
+        .background {
+            ZStack {
+                Rectangle().fill(.ultraThinMaterial)
+                // 极轻内侧描边，提升浅色桌面上的面板轮廓可读性（Pulse PanelLight 思路）。
+                RoundedRectangle(cornerRadius: 0, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
+                    .allowsHitTesting(false)
             }
-            // 首次挂载：选中最新并滚到顶。
+        }
+        .opacity(appeared ? 1 : 0)
+        .scaleEffect(appeared ? 1 : 0.96, anchor: .center)
+        .onAppear {
+            playAppearAnimation()
             selectNewest(clearSearch: false)
         }
         .onReceive(NotificationCenter.default.publisher(for: .hisCopyHistoryPanelDidOpen)) { _ in
-            // 窗口复用（orderOut 后再打开）时 onAppear 不会再跑：清空搜索并回到最新。
+            playAppearAnimation()
             selectNewest(clearSearch: true)
         }
         .onChange(of: searchText) { _ in
@@ -69,13 +78,22 @@ struct HistoryPanelView: View {
         }
     }
 
+    private func playAppearAnimation() {
+        appeared = false
+        withAnimation(HisCopyStyle.panelAppear) {
+            appeared = true
+        }
+    }
+
     /// 选中列表第一条（最新）并请求滚到顶部。
     private func selectNewest(clearSearch: Bool) {
         if clearSearch {
             searchText = ""
         }
         let items = store.filtered(search: clearSearch ? "" : searchText)
-        selection = items.first?.id
+        withAnimation(HisCopyStyle.selection) {
+            selection = items.first?.id
+        }
         scrollNonce += 1
     }
 
@@ -135,8 +153,8 @@ struct HistoryPanelView: View {
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        .padding(.horizontal, HisCopyStyle.stripHorizontalPadding)
+        .padding(.vertical, HisCopyStyle.stripVerticalPadding)
     }
 
     @ViewBuilder
@@ -147,14 +165,25 @@ struct HistoryPanelView: View {
                 subtitle: store.isPaused ? "捕获已暂停" : (store.items.isEmpty ? "复制内容后会出现在这里" : nil),
                 systemImage: store.items.isEmpty ? "doc.on.clipboard" : "magnifyingglass"
             )
+            .transition(
+                .opacity.combined(with: .offset(y: -6))
+            )
         } else {
             ScrollViewReader { proxy in
                 List(selection: $selection) {
                     ForEach(filtered) { item in
-                        HistoryRow(item: item)
+                        HistoryRow(item: item, isSelected: selection == item.id)
                             .tag(item.id)
                             .id(item.id)
                             .contentShape(Rectangle())
+                            .listRowInsets(EdgeInsets(
+                                top: 3,
+                                leading: HisCopyStyle.rowHorizontalInset,
+                                bottom: 3,
+                                trailing: HisCopyStyle.rowHorizontalInset
+                            ))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
                             .contextMenu {
                                 Button {
                                     pastePlain(item)
@@ -186,8 +215,9 @@ struct HistoryPanelView: View {
                         }
                     }
                 }
-                .listStyle(.inset)
-                .listRowSeparator(.visible)
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .animation(HisCopyStyle.selection, value: selection)
                 .onAppear {
                     scrollSelectionToTop(using: proxy)
                 }
@@ -195,6 +225,9 @@ struct HistoryPanelView: View {
                     scrollSelectionToTop(using: proxy)
                 }
             }
+            .transition(
+                .opacity.combined(with: .offset(y: 4))
+            )
         }
     }
 
@@ -207,9 +240,21 @@ struct HistoryPanelView: View {
 
             Spacer(minLength: 0)
 
-            Text("⌘V 纯文本 · ↩ 有格式")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+            HStack(spacing: 5) {
+                ShortcutKeyCap(label: "⌘V")
+                Text("纯文本")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                Text("·")
+                    .font(.caption2)
+                    .foregroundStyle(.quaternary)
+                ShortcutKeyCap(label: "↩")
+                Text("有格式")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("⌘V 粘贴纯文本，回车粘贴有格式")
 
             Button {
                 pastePlainSelected()
@@ -235,20 +280,24 @@ struct HistoryPanelView: View {
             .modifier(PanelPasteDefaultActionShortcut(isArmed: pasteShortcutGate.isArmed))
             .help("按原样写入剪贴板并向前置应用发送 ⌘V，然后关闭面板")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
+        .padding(.horizontal, HisCopyStyle.stripHorizontalPadding)
+        .padding(.vertical, HisCopyStyle.footerVerticalPadding)
     }
 }
 
 private struct HistoryRow: View {
     let item: ClipboardItem
+    var isSelected: Bool = false
     @ObservedObject private var store = ClipboardHistoryStore.shared
+    @State private var isHovered = false
 
     var body: some View {
         HStack(alignment: .center, spacing: HisCopyStyle.contentSpacing) {
             leadingVisual
+                .scaleEffect(isSelected ? 1.04 : 1)
+                .animation(HisCopyStyle.selection, value: isSelected)
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(item.textPreview)
                     .font(.body)
                     .lineLimit(2)
@@ -259,7 +308,7 @@ private struct HistoryRow: View {
                     Text(item.kindLabel)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal, 5)
+                        .padding(.horizontal, 6)
                         .padding(.vertical, 1)
                         .background(
                             Capsule(style: .continuous)
@@ -269,12 +318,24 @@ private struct HistoryRow: View {
                     Text(HisCopyStyle.relativeTimeString(item.date))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
+                        .monospacedDigit()
                 }
             }
         }
         .padding(.vertical, HisCopyStyle.rowVerticalPadding)
+        .padding(.horizontal, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            HistoryRowHighlight(isSelected: isSelected, isHovered: isHovered && !isSelected)
+        }
+        .onHover { hovering in
+            withAnimation(HisCopyStyle.hover) {
+                isHovered = hovering
+            }
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(item.kindLabel)，\(item.textPreview)")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     @ViewBuilder
