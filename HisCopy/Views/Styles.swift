@@ -5,8 +5,10 @@ import AppKit
 /// Pulse (Apache-2.0) panel patterns: continuous corners, spring open/close,
 /// accent selection wells, keycap hints. Zero third-party; no Pulse source copied.
 enum HisCopyStyle {
-    static let panelMinWidth: CGFloat = 390
+    static let panelMinWidth: CGFloat = 400
     static let panelMinHeight: CGFloat = 480
+    /// Continuous corner used by SwiftUI chrome and AppKit contentView mask.
+    static let panelCornerRadius: CGFloat = 14
     static let thumbnailSize: CGFloat = 38
     static let thumbnailCorner: CGFloat = 7
     static let symbolWellSize: CGFloat = 38
@@ -19,6 +21,11 @@ enum HisCopyStyle {
     static let stripVerticalPadding: CGFloat = 10
     static let footerVerticalPadding: CGFloat = 10
     static let keyCapCorner: CGFloat = 5
+    /// Hairline on light surfaces (Pulse PanelLight.edge idea: readable edge, not sliced).
+    static let panelEdgeOpacity: Double = 0.14
+    /// Soft scrim under material so wallpaper colour does not bleed through (esp. pink/red).
+    static let panelScrimOpacityLight: Double = 0.72
+    static let panelScrimOpacityDark: Double = 0.55
 
     /// Panel appear / expand (Pulse-like spring, Apple-native).
     static var panelAppear: Animation {
@@ -47,6 +54,31 @@ enum HisCopyStyle {
     }
 }
 
+/// Panel chrome: regular material + scrim + continuous clip + hairline.
+/// Thicker than ultraThin so desktop wallpaper (pink/red etc.) does not bleed as a side band.
+struct PanelChromeBackground: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: HisCopyStyle.panelCornerRadius, style: .continuous)
+        ZStack {
+            shape.fill(scrim)
+            shape.fill(.regularMaterial)
+            shape
+                .strokeBorder(Color.primary.opacity(HisCopyStyle.panelEdgeOpacity), lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private var scrim: Color {
+        if colorScheme == .dark {
+            return Color.black.opacity(HisCopyStyle.panelScrimOpacityDark)
+        }
+        // Slight cool-neutral grey (not pure white) so the panel reads as a surface.
+        return Color(white: 0.96).opacity(HisCopyStyle.panelScrimOpacityLight)
+    }
+}
+
 /// Soft SF Symbol well matching system list affordances.
 struct SymbolWell: View {
     let systemName: String
@@ -59,7 +91,7 @@ struct SymbolWell: View {
             .frame(width: size, height: size)
             .background(
                 RoundedRectangle(cornerRadius: HisCopyStyle.symbolWellCorner, style: .continuous)
-                    .fill(.quaternary.opacity(0.55))
+                    .fill(.quaternary.opacity(0.65))
             )
     }
 }
@@ -76,7 +108,7 @@ struct ThumbnailImage: View {
             .clipShape(RoundedRectangle(cornerRadius: HisCopyStyle.thumbnailCorner, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: HisCopyStyle.thumbnailCorner, style: .continuous)
-                    .strokeBorder(.quaternary.opacity(0.6), lineWidth: 0.5)
+                    .strokeBorder(.separator.opacity(0.7), lineWidth: 0.5)
             )
     }
 }
@@ -99,7 +131,7 @@ struct EmptyHistoryState: View {
             if let subtitle, !subtitle.isEmpty {
                 Text(subtitle)
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary.opacity(0.85))
             }
             Spacer(minLength: 0)
         }
@@ -122,11 +154,11 @@ struct ShortcutKeyCap: View {
             .padding(.vertical, 2)
             .background(
                 RoundedRectangle(cornerRadius: HisCopyStyle.keyCapCorner, style: .continuous)
-                    .fill(.quaternary.opacity(0.55))
+                    .fill(.quaternary.opacity(0.7))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: HisCopyStyle.keyCapCorner, style: .continuous)
-                    .strokeBorder(.separator.opacity(0.4), lineWidth: 0.5)
+                    .strokeBorder(.separator.opacity(0.55), lineWidth: 0.5)
             )
             .accessibilityHidden(true)
     }
@@ -146,10 +178,10 @@ struct HistoryRowHighlight: View {
 
     private var fill: Color {
         if isSelected {
-            return Color.accentColor.opacity(0.16)
+            return Color.accentColor.opacity(0.18)
         }
         if isHovered {
-            return Color.primary.opacity(0.055)
+            return Color.primary.opacity(0.06)
         }
         return .clear
     }

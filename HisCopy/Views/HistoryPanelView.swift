@@ -9,63 +9,46 @@ struct HistoryPanelView: View {
     @State private var appeared = false
     /// 递增以请求 List 滚到当前 selection（打开面板 / 清空搜索）。
     @State private var scrollNonce = 0
+    @FocusState private var searchFocused: Bool
 
     private var filtered: [ClipboardItem] {
         store.filtered(search: searchText)
     }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                toolbarStrip
+        VStack(spacing: 0) {
+            headerBar
 
-                Divider()
-                    .opacity(0.45)
-                    .padding(.horizontal, 8)
+            Divider()
+                .opacity(0.5)
+                .padding(.horizontal, 10)
 
-                content
+            content
 
-                Divider()
-                    .opacity(0.45)
-                    .padding(.horizontal, 8)
+            Divider()
+                .opacity(0.5)
+                .padding(.horizontal, 10)
 
-                footerBar
-            }
-            .navigationTitle("历史")
-            .navigationSubtitle(store.isPaused ? "已暂停" : "捕获中")
-            .searchable(text: $searchText, placement: .toolbar, prompt: "搜索历史")
-            .toolbar {
-                ToolbarItem(placement: .automatic) {
-                    Button {
-                        store.clearAll()
-                        selection = nil
-                    } label: {
-                        Label("清空", systemImage: "trash")
-                    }
-                    .disabled(store.items.isEmpty)
-                    .help("清空全部历史")
-                }
-            }
+            footerBar
         }
         .frame(minWidth: HisCopyStyle.panelMinWidth, minHeight: HisCopyStyle.panelMinHeight)
-        .background {
-            ZStack {
-                Rectangle().fill(.ultraThinMaterial)
-                // 极轻内侧描边，提升浅色桌面上的面板轮廓可读性（Pulse PanelLight 思路）。
-                RoundedRectangle(cornerRadius: 0, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
-                    .allowsHitTesting(false)
-            }
-        }
+        .background { PanelChromeBackground() }
+        .clipShape(RoundedRectangle(cornerRadius: HisCopyStyle.panelCornerRadius, style: .continuous))
         .opacity(appeared ? 1 : 0)
         .scaleEffect(appeared ? 1 : 0.96, anchor: .center)
         .onAppear {
             playAppearAnimation()
             selectNewest(clearSearch: false)
+            DispatchQueue.main.async {
+                searchFocused = true
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .hisCopyHistoryPanelDidOpen)) { _ in
             playAppearAnimation()
             selectNewest(clearSearch: true)
+            DispatchQueue.main.async {
+                searchFocused = true
+            }
         }
         .onChange(of: searchText) { _ in
             let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -133,28 +116,88 @@ struct HistoryPanelView: View {
             ?? store.items.first(where: { $0.id == id })
     }
 
-    private var toolbarStrip: some View {
-        HStack(spacing: 12) {
-            Toggle(isOn: Binding(
-                get: { !store.isPaused },
-                set: { store.isPaused = !$0 }
-            )) {
-                Label(
-                    store.isPaused ? "已暂停" : "捕获中",
-                    systemImage: store.isPaused ? "pause.circle" : "record.circle"
-                )
-                .font(.callout)
-                .labelStyle(.titleAndIcon)
-                .foregroundStyle(store.isPaused ? .secondary : .primary)
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .help(store.isPaused ? "恢复剪贴板捕获" : "暂停剪贴板捕获")
+    // MARK: - Header (custom — no NavigationStack / titlebar chrome)
 
-            Spacer(minLength: 0)
+    private var headerBar: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 10) {
+                Text("历史")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+
+                Text(store.isPaused ? "已暂停" : "捕获中")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(store.isPaused ? Color.secondary : Color.accentColor)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(store.isPaused
+                                  ? Color.primary.opacity(0.06)
+                                  : Color.accentColor.opacity(0.14))
+                    )
+
+                Spacer(minLength: 0)
+
+                Toggle(isOn: Binding(
+                    get: { !store.isPaused },
+                    set: { store.isPaused = !$0 }
+                )) {
+                    EmptyView()
+                }
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .labelsHidden()
+                .help(store.isPaused ? "恢复剪贴板捕获" : "暂停剪贴板捕获")
+                .accessibilityLabel(store.isPaused ? "已暂停捕获" : "捕获中")
+
+                Button {
+                    store.clearAll()
+                    selection = nil
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .disabled(store.items.isEmpty)
+                .help("清空全部历史")
+                .accessibilityLabel("清空")
+            }
+
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                TextField("搜索历史", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .focused($searchFocused)
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("清除搜索")
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.primary.opacity(0.055))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+            )
         }
         .padding(.horizontal, HisCopyStyle.stripHorizontalPadding)
-        .padding(.vertical, HisCopyStyle.stripVerticalPadding)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
     }
 
     @ViewBuilder
@@ -231,36 +274,28 @@ struct HistoryPanelView: View {
         }
     }
 
+    /// 底栏：左侧计数，右侧两枚动作按钮（键帽嵌在按钮内，去掉重复提示簇）。
     private var footerBar: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .center, spacing: 12) {
             Text("\(store.items.count) / \(ClipboardHistoryStore.maxItems)")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
+                .accessibilityLabel("历史 \(store.items.count) 条，上限 \(ClipboardHistoryStore.maxItems)")
 
-            Spacer(minLength: 0)
-
-            HStack(spacing: 5) {
-                ShortcutKeyCap(label: "⌘V")
-                Text("纯文本")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                Text("·")
-                    .font(.caption2)
-                    .foregroundStyle(.quaternary)
-                ShortcutKeyCap(label: "↩")
-                Text("有格式")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("⌘V 粘贴纯文本，回车粘贴有格式")
+            Spacer(minLength: 8)
 
             Button {
                 pastePlainSelected()
             } label: {
-                Label("纯文本", systemImage: "doc.plaintext")
+                HStack(spacing: 5) {
+                    ShortcutKeyCap(label: "⌘V")
+                    Text("纯文本")
+                        .font(.caption.weight(.medium))
+                }
+                .padding(.horizontal, 4)
             }
+            .buttonStyle(.bordered)
             .controlSize(.small)
             .disabled(selection == nil)
             .modifier(PanelPasteKeyboardShortcut(
@@ -273,8 +308,14 @@ struct HistoryPanelView: View {
             Button {
                 pasteFormattedSelected()
             } label: {
-                Label("粘贴原文", systemImage: "doc.richtext")
+                HStack(spacing: 5) {
+                    ShortcutKeyCap(label: "↩")
+                    Text("粘贴原文")
+                        .font(.caption.weight(.medium))
+                }
+                .padding(.horizontal, 4)
             }
+            .buttonStyle(.borderedProminent)
             .controlSize(.small)
             .disabled(selection == nil)
             .modifier(PanelPasteDefaultActionShortcut(isArmed: pasteShortcutGate.isArmed))
@@ -300,24 +341,25 @@ private struct HistoryRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.textPreview)
                     .font(.body)
+                    .foregroundStyle(.primary)
                     .lineLimit(2)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 HStack(spacing: 6) {
                     Text(item.kindLabel)
-                        .font(.caption2)
+                        .font(.caption2.weight(.medium))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
                         .background(
                             Capsule(style: .continuous)
-                                .fill(.quaternary.opacity(0.7))
+                                .fill(Color.primary.opacity(0.07))
                         )
 
                     Text(HisCopyStyle.relativeTimeString(item.date))
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
             }

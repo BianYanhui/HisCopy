@@ -240,15 +240,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let rootView = HistoryPanelView()
         let hosting = NSHostingController(rootView: rootView)
 
-        let window = NSPanel(
+        // Borderless floating panel: no traffic lights / titlebar chrome (Pulse-like).
+        // Subclass overrides canBecomeKey so ⌘V / 回车 / 搜索仍可用。
+        let window = HistoryPanel(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 540),
-            styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .utilityWindow],
+            styleMask: [.borderless, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "HisCopy"
-        window.titleVisibility = .visible
-        window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
         window.isOpaque = false
         window.backgroundColor = .clear
@@ -355,3 +355,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 }
+
+
+/// Borderless history panel that can still become key for search & paste shortcuts.
+private final class HistoryPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
