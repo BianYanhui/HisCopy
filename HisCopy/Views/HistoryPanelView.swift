@@ -3,6 +3,7 @@ import AppKit
 
 struct HistoryPanelView: View {
     @ObservedObject private var store = ClipboardHistoryStore.shared
+    @ObservedObject private var pasteShortcutGate = PanelPasteShortcutGate.shared
     @State private var searchText = ""
     @State private var selection: UUID?
     @State private var appeared = false
@@ -59,6 +60,7 @@ struct HistoryPanelView: View {
     }
 
     /// ⌘V：无格式纯文本 → 模拟粘贴 → 关闭面板。
+    /// 快捷键路径受 `PanelPasteShortcutGate` 保护；鼠标点击按钮始终可用。
     private func pastePlainSelected() {
         guard let item = selectedItem() else { return }
         pastePlain(item)
@@ -180,7 +182,11 @@ struct HistoryPanelView: View {
             }
             .controlSize(.small)
             .disabled(selection == nil)
-            .keyboardShortcut("v", modifiers: .command)
+            .modifier(PanelPasteKeyboardShortcut(
+                isArmed: pasteShortcutGate.isArmed,
+                key: "v",
+                modifiers: .command
+            ))
             .help("写入无格式纯文本并向前置应用发送 ⌘V，然后关闭面板")
 
             Button {
@@ -190,7 +196,7 @@ struct HistoryPanelView: View {
             }
             .controlSize(.small)
             .disabled(selection == nil)
-            .keyboardShortcut(.defaultAction)
+            .modifier(PanelPasteDefaultActionShortcut(isArmed: pasteShortcutGate.isArmed))
             .help("按原样写入剪贴板并向前置应用发送 ⌘V，然后关闭面板")
         }
         .padding(.horizontal, 14)
@@ -242,6 +248,35 @@ private struct HistoryRow: View {
             ThumbnailImage(image: image)
         } else {
             SymbolWell(systemName: item.symbolName)
+        }
+    }
+}
+
+/// 仅在闸门解锁后挂载面板内粘贴快捷键，避免与全局呼出热键抢事件。
+private struct PanelPasteKeyboardShortcut: ViewModifier {
+    let isArmed: Bool
+    let key: KeyEquivalent
+    let modifiers: EventModifiers
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isArmed {
+            content.keyboardShortcut(key, modifiers: modifiers)
+        } else {
+            content
+        }
+    }
+}
+
+private struct PanelPasteDefaultActionShortcut: ViewModifier {
+    let isArmed: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isArmed {
+            content.keyboardShortcut(.defaultAction)
+        } else {
+            content
         }
     }
 }

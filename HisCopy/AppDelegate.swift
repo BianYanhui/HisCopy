@@ -61,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func handleHideHistoryPanel() {
         historyWindow?.orderOut(nil)
+        PanelPasteShortcutGate.shared.reset()
     }
 
     @objc private func handlePrepareForPaste(_ notification: Notification) {
@@ -198,6 +199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleHistoryPanel() {
         if let window = historyWindow, window.isVisible {
             window.orderOut(nil)
+            PanelPasteShortcutGate.shared.reset()
             return
         }
         showHistoryPanel()
@@ -239,6 +241,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if front?.bundleIdentifier != Bundle.main.bundleIdentifier {
             previousFrontmostApp = front
         }
+        // 必须在成为 key window 之前上锁，避免呼出和弦落入面板 ⌘V / 回车。
+        PanelPasteShortcutGate.shared.beginArmingAfterPanelOpen()
         // ⇧⌘V 呼出：始终居中于当前屏幕。
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -249,6 +253,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func prepareForPasteToFrontmostApp(hidePanel: Bool) {
         if hidePanel {
             historyWindow?.orderOut(nil)
+            PanelPasteShortcutGate.shared.reset()
         }
         if let app = previousFrontmostApp, !app.isTerminated {
             app.activate(options: [.activateIgnoringOtherApps])
