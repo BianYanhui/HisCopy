@@ -7,40 +7,51 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("剪贴板") {
+            Section {
                 Toggle("暂停捕获", isOn: $store.isPaused)
-                LabeledContent("历史条数", value: "\(store.items.count) / \(ClipboardHistoryStore.maxItems)")
+                LabeledContent("历史条数") {
+                    Text("\(store.items.count) / \(ClipboardHistoryStore.maxItems)")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
                 Button("清空历史", role: .destructive) {
                     store.clearAll()
                 }
                 .disabled(store.items.isEmpty)
+            } header: {
+                Text("剪贴板")
+            } footer: {
+                Text("选中历史条目会复制回系统剪贴板；本版本不模拟按键粘贴（无需辅助功能权限）。")
             }
 
-            Section("通用") {
+            Section {
                 // 占位：暂不真正注册 SMAppService
                 Toggle("开机时启动 HisCopy", isOn: $launchAtLogin)
+            } header: {
+                Text("通用")
+            } footer: {
+                Text("开机自启尚未接入系统服务，开关仅作偏好占位。")
             }
 
-            Section("更新") {
+            Section {
                 Toggle("自动检查更新", isOn: $updater.autoCheckEnabled)
-                HStack {
-                    Text("当前版本 \(AppUpdater.currentVersion())（\(AppUpdater.currentBuild())）")
+                LabeledContent("当前版本") {
+                    Text("\(AppUpdater.currentVersion())（\(AppUpdater.currentBuild())）")
                         .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("检查更新…") { updater.checkForUpdatesFromMenu() }
-                        .disabled(updater.isBusy)
+                        .monospacedDigit()
                 }
-            }
-
-            Section("关于") {
-                Text("选中历史条目会复制回系统剪贴板；本版本不模拟按键粘贴（无需辅助功能权限）。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Button("检查更新…") {
+                    updater.checkForUpdatesFromMenu()
+                }
+                .disabled(updater.isBusy)
+            } header: {
+                Text("更新")
+            } footer: {
+                Text("从 GitHub Releases 检查并下载 HisCopy.zip。")
             }
         }
         .formStyle(.grouped)
-        .frame(width: 440, height: 360)
-        .padding()
+        .frame(width: 460, height: 380)
     }
 }
 
