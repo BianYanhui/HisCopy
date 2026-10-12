@@ -22,11 +22,10 @@ struct SettingsView: View {
             } header: {
                 Text("剪贴板")
             } footer: {
-                Text("点选历史条目会写入系统剪贴板，并尝试向前置应用发送 ⌘V（需辅助功能权限）。")
+                Text("在历史面板中：⌘V 粘贴无格式纯文本并关闭；回车粘贴有格式原文并关闭。")
             }
 
             Section {
-                Toggle("粘贴后自动隐藏面板", isOn: $pasteController.autoHideAfterPaste)
                 LabeledContent("辅助功能") {
                     Text(pasteController.isAccessibilityTrusted ? "已授权" : "未授权")
                         .foregroundStyle(pasteController.isAccessibilityTrusted ? Color.secondary : Color.orange)
@@ -52,11 +51,10 @@ struct SettingsView: View {
             } header: {
                 Text("全局快捷键")
             } footer: {
-                Text("默认 ⇧⌘V（Shift+Command+V）。使用系统 Carbon RegisterEventHotKey，改后立即生效。仅打开面板通常无需辅助功能权限；模拟 ⌘V 粘贴才需要。菜单栏：左键打开历史，右键（或 Option+点击）打开菜单。")
+                Text("默认 ⇧⌘V（Shift+Command+V），面板显示在屏幕正中。使用系统 Carbon RegisterEventHotKey，改后立即生效。仅打开面板通常无需辅助功能权限；模拟 ⌘V 粘贴才需要。菜单栏图标使用常规菜单。")
             }
 
             Section {
-                // 占位：暂不真正注册 SMAppService
                 Toggle("开机时启动 HisCopy", isOn: $launchAtLogin)
             } header: {
                 Text("通用")
@@ -82,7 +80,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 500, height: 560)
+        .frame(width: 500, height: 540)
         .onAppear {
             pasteController.refreshAccessibilityStatus()
         }

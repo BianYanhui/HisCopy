@@ -5,7 +5,6 @@ import Combine
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
-    private var statusMenu: NSMenu?
     private var historyWindow: NSWindow?
     private var pauseMenuItem: NSMenuItem?
     private var historyMenuItem: NSMenuItem?
@@ -75,10 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let image = statusImage(paused: ClipboardHistoryStore.shared.isPaused)
             image?.isTemplate = true
             button.image = image
-            button.toolTip = "HisCopy — 左键打开历史，右键打开菜单"
-            button.target = self
-            button.action = #selector(statusItemButtonClicked(_:))
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            button.toolTip = "HisCopy"
         }
 
         let menu = NSMenu()
@@ -124,30 +120,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quitItem.target = self
         menu.addItem(quitItem)
 
-        // 不永久挂 menu：左键走 action 呼出面板，右键/Option+点击再弹出菜单。
-        statusMenu = menu
+        item.menu = menu
         statusItem = item
-    }
-
-    @objc private func statusItemButtonClicked(_ sender: Any?) {
-        guard let event = NSApp.currentEvent else {
-            toggleHistoryPanel()
-            return
-        }
-        let isRight = event.type == .rightMouseUp
-        let isOption = event.modifierFlags.contains(.option)
-        if isRight || isOption {
-            popUpStatusMenu()
-        } else {
-            toggleHistoryPanel()
-        }
-    }
-
-    private func popUpStatusMenu() {
-        guard let menu = statusMenu, let button = statusItem?.button else { return }
-        // 直接在按钮下方弹出，不永久挂 item.menu，这样左键仍走 action。
-        let point = NSPoint(x: 0, y: button.bounds.height + 2)
-        menu.popUp(positioning: nil, at: point, in: button)
     }
 
     private func observePauseState() {
@@ -265,12 +239,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if front?.bundleIdentifier != Bundle.main.bundleIdentifier {
             previousFrontmostApp = front
         }
-        positionHistoryWindowNearStatusItem(window)
+        // ⇧⌘V 呼出：始终居中于当前屏幕。
+        window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    /// 供粘贴流程调用：可选收起面板，并尝试把焦点交回先前前置应用。
+    /// 供粘贴流程调用：收起面板，并把焦点交回先前前置应用。
     func prepareForPasteToFrontmostApp(hidePanel: Bool) {
         if hidePanel {
             historyWindow?.orderOut(nil)
@@ -278,39 +253,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let app = previousFrontmostApp, !app.isTerminated {
             app.activate(options: [.activateIgnoringOtherApps])
         }
-    }
-
-    /// 尽量把面板锚定在菜单栏图标下方；无法取得图标位置时回退到居中。
-    private func positionHistoryWindowNearStatusItem(_ window: NSWindow) {
-        guard let button = statusItem?.button,
-              let buttonWindow = button.window else {
-            if !window.isVisible {
-                window.center()
-            }
-            return
-        }
-
-        let buttonRectInWindow = button.convert(button.bounds, to: nil)
-        let buttonScreenRect = buttonWindow.convertToScreen(buttonRectInWindow)
-        var frame = window.frame
-        let gap: CGFloat = 6
-        frame.origin.x = buttonScreenRect.midX - frame.width / 2
-        frame.origin.y = buttonScreenRect.minY - frame.height - gap
-
-        // 约束在可见屏幕内。
-        if let screen = buttonWindow.screen ?? NSScreen.main {
-            let visible = screen.visibleFrame
-            if frame.maxX > visible.maxX {
-                frame.origin.x = visible.maxX - frame.width - 8
-            }
-            if frame.minX < visible.minX {
-                frame.origin.x = visible.minX + 8
-            }
-            if frame.minY < visible.minY {
-                frame.origin.y = visible.minY + 8
-            }
-        }
-        window.setFrame(frame, display: true)
     }
 
     @objc private func togglePauseCapture() {

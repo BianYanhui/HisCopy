@@ -3,7 +3,7 @@ import ApplicationServices
 import Combine
 
 extension Notification.Name {
-    /// 请求隐藏历史面板（粘贴后自动隐藏等）。
+    /// 请求隐藏历史面板。
     static let hisCopyHideHistoryPanel = Notification.Name("HisCopyHideHistoryPanel")
     /// 粘贴前：隐藏面板并恢复先前前置应用焦点。
     static let hisCopyPrepareForPaste = Notification.Name("HisCopyPrepareForPaste")
@@ -15,24 +15,11 @@ extension Notification.Name {
 final class PasteController: ObservableObject {
     static let shared = PasteController()
 
-    static let autoHideKey = "HisCopy.autoHideAfterPaste"
     private static let didGuideAccessibilityKey = "HisCopy.didGuideAccessibility"
-
-    /// 粘贴成功后是否自动隐藏历史面板（默认开启）。
-    @Published var autoHideAfterPaste: Bool {
-        didSet { UserDefaults.standard.set(autoHideAfterPaste, forKey: Self.autoHideKey) }
-    }
 
     @Published private(set) var isAccessibilityTrusted: Bool
 
     private init() {
-        let defaults = UserDefaults.standard
-        if defaults.object(forKey: Self.autoHideKey) == nil {
-            defaults.set(true, forKey: Self.autoHideKey)
-            autoHideAfterPaste = true
-        } else {
-            autoHideAfterPaste = defaults.bool(forKey: Self.autoHideKey)
-        }
         isAccessibilityTrusted = AXIsProcessTrusted()
     }
 
@@ -54,28 +41,25 @@ final class PasteController: ObservableObject {
         return trusted
     }
 
-    /// 点选历史后：内容已由调用方写入剪贴板；尝试 ⌘V 粘贴到前置应用。
+    /// 内容已由调用方写入剪贴板；关闭面板并尝试 ⌘V 粘贴到前置应用。
     /// - Returns: `true` 表示已发出粘贴事件；`false` 表示仅写入剪贴板（无权限或失败）。
     @discardableResult
-    func pasteToFrontmostApp(hidePanelIfConfigured: Bool = true) -> Bool {
+    func pasteToFrontmostAppAndClose() -> Bool {
         refreshAccessibilityStatus()
 
         guard isAccessibilityTrusted else {
             presentAccessibilityGuidance()
-            if hidePanelIfConfigured && autoHideAfterPaste {
-                NotificationCenter.default.post(name: .hisCopyHideHistoryPanel, object: nil)
-            }
+            // 无权限：仍关闭面板（内容已在剪贴板，可手动 ⌘V）。
+            NotificationCenter.default.post(name: .hisCopyHideHistoryPanel, object: nil)
             return false
         }
 
-        let shouldHide = hidePanelIfConfigured && autoHideAfterPaste
         NotificationCenter.default.post(
             name: .hisCopyPrepareForPaste,
             object: nil,
-            userInfo: ["hidePanel": shouldHide]
+            userInfo: ["hidePanel": true]
         )
 
-        // 稍候再发 ⌘V，等待前置 App 重新获得焦点。
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             self?.postCommandV()
         }
@@ -84,7 +68,6 @@ final class PasteController: ObservableObject {
 
     /// 打开「系统设置 → 隐私与安全性 → 辅助功能」。
     func openAccessibilitySettings() {
-        // Ventura+ System Settings；旧式 URL 作为回退。
         let candidates = [
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
             "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility"
@@ -117,11 +100,9 @@ final class PasteController: ObservableObject {
 
     private func presentAccessibilityGuidance() {
         let alreadyGuided = UserDefaults.standard.bool(forKey: Self.didGuideAccessibilityKey)
-        // 非首次：静默降级为仅剪贴板，避免反复弹窗打扰。
         guard !alreadyGuided else { return }
 
         UserDefaults.standard.set(true, forKey: Self.didGuideAccessibilityKey)
-        // 顺带弹出系统授权对话框（若尚未授权）。
         _ = checkAccessibilityTrusted(promptSystemDialog: true)
 
         let alert = NSAlert()

@@ -92,7 +92,32 @@ final class ClipboardHistoryStore: ObservableObject {
         }
     }
 
-    /// Write item back to the system pasteboard（粘贴由 PasteController 负责模拟 ⌘V）。
+    /// 仅写入无格式纯文本（用于面板内 ⌘V）。
+    func copyPlainTextToPasteboard(_ item: ClipboardItem) {
+        ClipboardMonitor.shared.markNextWriteAsSelf()
+        let pb = NSPasteboard.general
+        pb.clearContents()
+
+        let plain: String? = {
+            if let t = item.plainText, !t.isEmpty { return t }
+            switch item.kind {
+            case .files:
+                return item.fileURLs?.joined(separator: "\n")
+            case .image:
+                return item.textPreview
+            default:
+                return item.textPreview.isEmpty ? nil : item.textPreview
+            }
+        }()
+
+        if let plain {
+            pb.setString(plain, forType: .string)
+        }
+
+        pb.setString("1", forType: NSPasteboard.PasteboardType(ClipboardMonitor.selfWriteType))
+    }
+
+    /// 按原样写回剪贴板（富文本/HTML/图片/文件等，用于回车粘贴）。
     func copyToPasteboard(_ item: ClipboardItem) {
         ClipboardMonitor.shared.markNextWriteAsSelf()
         let pb = NSPasteboard.general
