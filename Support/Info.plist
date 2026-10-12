@@ -32,9 +32,7 @@
 	<string>Copyright © 2026 BianYanhui. MIT License.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
-	<key>NSAppleEventsUsageDescription</key>
-	<string>HisCopy 需要辅助功能权限以便将剪贴板内容粘贴到其他应用（当前版本仅为占位）。</string>
-	<key>NSAccessibilityUsageDescription</key>
-	<string>HisCopy 需要辅助功能权限以便将剪贴板内容粘贴到其他应用（当前版本仅为占位）。</string>
+	<key>NSPasteboardUsageDescription</key>
+	<string>HisCopy 需要读取系统剪贴板以保存历史记录，并在你点选条目时写回剪贴板。</string>
 </dict>
 </plist>
