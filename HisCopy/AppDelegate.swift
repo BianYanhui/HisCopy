@@ -12,6 +12,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables = Set<AnyCancellable>()
     /// 打开面板前的前置应用，粘贴时再激活以便 ⌘V 命中正确目标。
     private var previousFrontmostApp: NSRunningApplication?
+    /// Esc 关闭面板。
+    private var escapeMonitor: Any?
+    /// 点击面板外部关闭。
+    private var clickOutsideMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -51,17 +55,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         GlobalHotKeyManager.shared.stop()
         ClipboardMonitor.shared.stop()
+        tearDownPanelDismissMonitors()
     }
 
     @objc private func handleWillQuitForUpdate() {
         GlobalHotKeyManager.shared.stop()
         ClipboardMonitor.shared.stop()
+        tearDownPanelDismissMonitors()
         historyWindow?.orderOut(nil)
     }
 
     @objc private func handleHideHistoryPanel() {
-        historyWindow?.orderOut(nil)
-        PanelPasteShortcutGate.shared.reset()
+        hideHistoryPanel()
     }
 
     @objc private func handlePrepareForPaste(_ notification: Notification) {
@@ -154,15 +159,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let manager = GlobalHotKeyManager.shared
         let shortcut = manager.shortcut
 
+        // 不把全局热键设为菜单 keyEquivalent：Carbon 已负责全局 shortcut。
+        // 若菜单再挂同一组合，activate 后松手时 AppKit 可能再次触发 toggle 关掉面板。
         if let historyMenuItem {
-            let equiv = shortcut.menuKeyEquivalent
-            if manager.registrationFailureMessage == nil, !equiv.isEmpty {
-                historyMenuItem.keyEquivalent = equiv
-                historyMenuItem.keyEquivalentModifierMask = shortcut.cocoaModifierFlags
-            } else {
-                historyMenuItem.keyEquivalent = ""
-                historyMenuItem.keyEquivalentModifierMask = []
-            }
+            historyMenuItem.keyEquivalent = ""
+            historyMenuItem.keyEquivalentModifierMask = []
         }
 
         if let hotKeyStatusMenuItem {
@@ -198,11 +199,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleHistoryPanel() {
         if let window = historyWindow, window.isVisible {
-            window.orderOut(nil)
-            PanelPasteShortcutGate.shared.reset()
+            hideHistoryPanel()
             return
         }
         showHistoryPanel()
+    }
+
+    private func hideHistoryPanel() {
+        tearDownPanelDismissMonitors()
+        historyWindow?.orderOut(nil)
+        PanelPasteShortcutGate.shared.reset()
     }
 
     @objc private func showHistoryPanel() {
@@ -231,6 +237,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.animationBehavior = .utilityWindow
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        // 松手/短暂失活时不要自动消失；仅由热键再次按下、Esc、粘贴、点外部等关闭。
+        window.hidesOnDeactivate = false
         window.contentViewController = hosting
         historyWindow = window
         presentHistoryWindow(window)
@@ -247,13 +255,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        installPanelDismissMonitors()
+    }
+
+    /// Esc 与点击外部关闭面板（再次 ⇧⌘V / 粘贴成功另有路径）。
+    private func installPanelDismissMonitors() {
+        tearDownPanelDismissMonitors()
+
+        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            // kVK_Escape = 53
+            if event.keyCode == 53 {
+                self.hideHistoryPanel()
+                return nil
+            }
+            return event
+        }
+
+        clickOutsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self, let window = self.historyWindow, window.isVisible else { return }
+            let screenPoint = NSEvent.mouseLocation
+            if !window.frame.contains(screenPoint) {
+                // 状态栏按钮点击留给菜单，不在这里抢。
+                if let button = self.statusItem?.button, let buttonWindow = button.window {
+                    let buttonRect = button.convert(button.bounds, to: nil)
+                    let buttonScreen = buttonWindow.convertToScreen(buttonRect)
+                    if buttonScreen.contains(screenPoint) { return }
+                }
+                DispatchQueue.main.async {
+                    self.hideHistoryPanel()
+                }
+            }
+        }
+    }
+
+    private func tearDownPanelDismissMonitors() {
+        if let escapeMonitor {
+            NSEvent.removeMonitor(escapeMonitor)
+            self.escapeMonitor = nil
+        }
+        if let clickOutsideMonitor {
+            NSEvent.removeMonitor(clickOutsideMonitor)
+            self.clickOutsideMonitor = nil
+        }
     }
 
     /// 供粘贴流程调用：收起面板，并把焦点交回先前前置应用。
     func prepareForPasteToFrontmostApp(hidePanel: Bool) {
         if hidePanel {
-            historyWindow?.orderOut(nil)
-            PanelPasteShortcutGate.shared.reset()
+            self.hideHistoryPanel()
         }
         if let app = previousFrontmostApp, !app.isTerminated {
             app.activate(options: [.activateIgnoringOtherApps])

@@ -191,6 +191,7 @@ final class AppUpdater: ObservableObject {
             throw UpdateError.notWritable(installURL.path)
         }
 
+        // 主线程只负责对话框 / 进度条；下载挂起不阻塞 run loop。
         showProgress(title: "正在下载 HisCopy \(release.version)…")
         defer { hideProgress() }
 
@@ -201,44 +202,30 @@ final class AppUpdater: ObservableObject {
 
         updateProgress(title: "正在安装…", indeterminate: true)
 
-        // Work directory for the zip only. The staged .app is copied out before we
-        // quit; we must never delete or overwrite the *running* bundle here.
-        let workDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("HisCopy-update-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
+        // 解压 / 拷贝 / xattr 等长时间 IO 必须离开 MainActor，否则进度条卡死、UI 无响应。
+        let expectedVersion = release.version
+        let currentVersion = Self.currentVersion()
+        let assetName = Self.assetName
+        let expectedBundleID = Self.expectedBundleID
+        let staging = try await Task.detached(priority: .userInitiated) {
+            try Self.stageDownloadedUpdate(
+                tempZip: tempURL,
+                expectedVersion: expectedVersion,
+                currentVersion: currentVersion,
+                assetName: assetName,
+                expectedBundleID: expectedBundleID
+            )
+        }.value
 
-        let zipPath = workDir.appendingPathComponent(Self.assetName)
-        if FileManager.default.fileExists(atPath: zipPath.path) {
-            try FileManager.default.removeItem(at: zipPath)
-        }
-        try FileManager.default.moveItem(at: tempURL, to: zipPath)
-
-        let unzipDir = workDir.appendingPathComponent("unzipped", isDirectory: true)
-        try FileManager.default.createDirectory(at: unzipDir, withIntermediateDirectories: true)
-        try Self.unzip(zipPath, into: unzipDir)
-
-        let newApp = try Self.findAppBundle(in: unzipDir)
-        try Self.validateAppBundle(newApp, expectedVersion: release.version)
-        _ = try? Self.run("/usr/bin/xattr", arguments: ["-cr", newApp.path])
-
-        // Stage outside workDir so a future cleanup cannot touch it; the helper
-        // owns this copy after we quit.
-        let staging = FileManager.default.temporaryDirectory
-            .appendingPathComponent("HisCopy-new-\(UUID().uuidString).app", isDirectory: true)
-        if FileManager.default.fileExists(atPath: staging.path) {
-            try FileManager.default.removeItem(at: staging)
-        }
-        try FileManager.default.copyItem(at: newApp, to: staging)
-        // Zip/workDir are no longer needed; removing them cannot affect the running
-        // bundle (runningURL) or the staging copy.
-        try? FileManager.default.removeItem(at: workDir)
-
-        try Self.launchReplacementScript(
-            sourceApp: staging,
-            installApp: installURL,
-            runningApp: runningURL,
-            pid: ProcessInfo.processInfo.processIdentifier
-        )
+        // helper 首段仅 nohup 再 exec 后立刻退出；短暂 wait 确保子进程已起来。
+        try await Task.detached(priority: .userInitiated) {
+            try Self.launchReplacementScript(
+                sourceApp: staging,
+                installApp: installURL,
+                runningApp: runningURL,
+                pid: ProcessInfo.processInfo.processIdentifier
+            )
+        }.value
 
         prepareToQuitForUpdate()
         // Brief pause so the detached helper is definitely scheduled, then exit.
@@ -246,6 +233,48 @@ final class AppUpdater: ObservableObject {
         try await Task.sleep(nanoseconds: 400_000_000)
         hideProgress()
         exit(0)
+    }
+
+    /// 后台：zip → 解压 → 校验 → staging，绝不碰正在运行的 .app。
+    nonisolated private static func stageDownloadedUpdate(
+        tempZip: URL,
+        expectedVersion: String,
+        currentVersion: String,
+        assetName: String,
+        expectedBundleID: String
+    ) throws -> URL {
+        let fm = FileManager.default
+        let workDir = fm.temporaryDirectory
+            .appendingPathComponent("HisCopy-update-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: workDir, withIntermediateDirectories: true)
+
+        let zipPath = workDir.appendingPathComponent(assetName)
+        if fm.fileExists(atPath: zipPath.path) {
+            try fm.removeItem(at: zipPath)
+        }
+        try fm.moveItem(at: tempZip, to: zipPath)
+
+        let unzipDir = workDir.appendingPathComponent("unzipped", isDirectory: true)
+        try fm.createDirectory(at: unzipDir, withIntermediateDirectories: true)
+        try unzip(zipPath, into: unzipDir)
+
+        let newApp = try findAppBundle(in: unzipDir)
+        try validateAppBundle(
+            newApp,
+            expectedVersion: expectedVersion,
+            currentVersion: currentVersion,
+            expectedBundleID: expectedBundleID
+        )
+        _ = try? run("/usr/bin/xattr", arguments: ["-cr", newApp.path])
+
+        let staging = fm.temporaryDirectory
+            .appendingPathComponent("HisCopy-new-\(UUID().uuidString).app", isDirectory: true)
+        if fm.fileExists(atPath: staging.path) {
+            try fm.removeItem(at: staging)
+        }
+        try fm.copyItem(at: newApp, to: staging)
+        try? fm.removeItem(at: workDir)
+        return staging
     }
 
     /// Stop clipboard polling, hide windows, and quiet activity before the
@@ -259,12 +288,12 @@ final class AppUpdater: ObservableObject {
         NSApp.mainWindow?.makeFirstResponder(nil)
     }
 
-    private static func unzip(_ zip: URL, into directory: URL) throws {
+    nonisolated private static func unzip(_ zip: URL, into directory: URL) throws {
         let result = try run("/usr/bin/ditto", arguments: ["-x", "-k", zip.path, directory.path])
         guard result == 0 else { throw UpdateError.unzipFailed }
     }
 
-    private static func findAppBundle(in directory: URL) throws -> URL {
+    nonisolated private static func findAppBundle(in directory: URL) throws -> URL {
         let contents = try FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: [.isDirectoryKey],
@@ -282,7 +311,12 @@ final class AppUpdater: ObservableObject {
         throw UpdateError.missingAppInZip
     }
 
-    private static func validateAppBundle(_ app: URL, expectedVersion: String) throws {
+    nonisolated private static func validateAppBundle(
+        _ app: URL,
+        expectedVersion: String,
+        currentVersion: String,
+        expectedBundleID: String
+    ) throws {
         let infoURL = app.appendingPathComponent("Contents/Info.plist")
         guard let info = NSDictionary(contentsOf: infoURL) as? [String: Any],
               let bundleID = info["CFBundleIdentifier"] as? String else {
@@ -296,7 +330,7 @@ final class AppUpdater: ObservableObject {
         if isVersion(expectedVersion, newerThan: version) {
             throw UpdateError.versionNotNewer(version)
         }
-        if !isVersion(version, newerThan: currentVersion()) {
+        if !isVersion(version, newerThan: currentVersion) {
             throw UpdateError.versionNotNewer(version)
         }
         let executable = app.appendingPathComponent("Contents/MacOS/HisCopy")
@@ -340,7 +374,7 @@ final class AppUpdater: ObservableObject {
 
     /// Spawns a detached helper that waits for this PID to exit, then installs
     /// the new app (without ever deleting the live bundle beforehand).
-    private static func launchReplacementScript(
+    nonisolated private static func launchReplacementScript(
         sourceApp: URL,
         installApp: URL,
         runningApp: URL,
@@ -444,7 +478,7 @@ final class AppUpdater: ObservableObject {
     }
 
     @discardableResult
-    private static func run(_ launchPath: String, arguments: [String]) throws -> Int32 {
+    nonisolated private static func run(_ launchPath: String, arguments: [String]) throws -> Int32 {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: launchPath)
         process.arguments = arguments
@@ -466,7 +500,7 @@ final class AppUpdater: ObservableObject {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
     }
 
-    static func normalizedVersion(_ raw: String) -> String {
+    nonisolated static func normalizedVersion(_ raw: String) -> String {
         var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if s.lowercased().hasPrefix("v") {
             s.removeFirst()
@@ -475,7 +509,7 @@ final class AppUpdater: ObservableObject {
     }
 
     /// True when `lhs` is strictly newer than `rhs` (semver-ish: major.minor.patch).
-    static func isVersion(_ lhs: String, newerThan rhs: String) -> Bool {
+    nonisolated static func isVersion(_ lhs: String, newerThan rhs: String) -> Bool {
         let a = numericParts(lhs)
         let b = numericParts(rhs)
         let count = max(a.count, b.count)
@@ -487,7 +521,7 @@ final class AppUpdater: ObservableObject {
         return false
     }
 
-    private static func numericParts(_ version: String) -> [Int] {
+    nonisolated private static func numericParts(_ version: String) -> [Int] {
         normalizedVersion(version)
             .split(separator: ".", omittingEmptySubsequences: false)
             .map { part in
@@ -600,7 +634,7 @@ final class AppUpdater: ObservableObject {
     }
 }
 
-enum UpdateError: LocalizedError {
+enum UpdateError: LocalizedError, Sendable {
     case noReleases
     case missingAsset
     case badResponse
