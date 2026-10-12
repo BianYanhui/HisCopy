@@ -11,8 +11,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var historyMenuItem: NSMenuItem?
     private var hotKeyStatusMenuItem: NSMenuItem?
     private var cancellables = Set<AnyCancellable>()
-    /// 打开面板前的前置应用，粘贴时再激活以便 ⌘V 命中正确目标。
-    private var previousFrontmostApp: NSRunningApplication?
     /// Esc 关闭面板。
     private var escapeMonitor: Any?
     /// 点击面板外部关闭。
@@ -267,10 +265,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func presentHistoryWindow(_ window: NSWindow) {
-        let front = NSWorkspace.shared.frontmostApplication
-        if front?.bundleIdentifier != Bundle.main.bundleIdentifier {
-            previousFrontmostApp = front
-        }
+        // Capture destination app + focused field BEFORE we become key / activate.
+        PasteFocusCoordinator.shared.captureFromFrontmostApplication()
         // 必须在成为 key window 之前上锁，避免呼出和弦落入面板 ⌘V / 回车。
         PanelPasteShortcutGate.shared.beginArmingAfterPanelOpen()
         // ⇧⌘V 呼出：始终居中于当前屏幕。
@@ -336,14 +332,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 供粘贴流程调用：收起面板，并把焦点交回先前前置应用。
+    /// 供粘贴流程调用：收起面板，并把焦点交回打开面板前的目标应用/输入框。
     func prepareForPasteToFrontmostApp(hidePanel: Bool) {
         if hidePanel {
+            // Immediate orderOut — animated dismiss races with focus handoff.
             self.hideHistoryPanel(animated: false)
         }
-        if let app = previousFrontmostApp, !app.isTerminated {
-            app.activate(options: [.activateIgnoringOtherApps])
-        }
+        _ = PasteFocusCoordinator.shared.restoreDestinationApp()
     }
 
     @objc private func togglePauseCapture() {

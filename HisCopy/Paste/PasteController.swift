@@ -22,6 +22,12 @@ final class PasteController: ObservableObject {
     static let shared = PasteController()
 
     private static let didGuideAccessibilityKey = "HisCopy.didGuideAccessibility"
+    /// Poll interval while waiting for the destination app to become frontmost.
+    private static let frontmostPollInterval: TimeInterval = 0.02
+    /// Max wait (~500ms) before posting ⌘V anyway.
+    private static let frontmostMaxAttempts = 25
+    /// Brief settle after frontmost so the key window / field accepts keystrokes.
+    private static let postFrontmostSettle: TimeInterval = 0.03
 
     @Published private(set) var isAccessibilityTrusted: Bool
 
@@ -66,9 +72,8 @@ final class PasteController: ObservableObject {
             userInfo: ["hidePanel": true]
         )
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            self?.postCommandV()
-        }
+        let targetPID = PasteFocusCoordinator.shared.targetPID
+        waitUntilFrontmost(targetPID: targetPID, attempt: 0)
         return true
     }
 
@@ -90,8 +95,40 @@ final class PasteController: ObservableObject {
 
     // MARK: - Private
 
+    /// Wait until the captured destination app is frontmost, then synthesize ⌘V.
+    /// A fixed delay alone races activation and lands paste in HisCopy / nowhere.
+    private func waitUntilFrontmost(targetPID: pid_t?, attempt: Int) {
+        if let targetPID {
+            let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            if frontPID == targetPID {
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.postFrontmostSettle) { [weak self] in
+                    self?.postCommandV()
+                }
+                return
+            }
+            // Activation can lag; nudge again a few times.
+            if attempt == 5 || attempt == 15 {
+                _ = PasteFocusCoordinator.shared.restoreDestinationApp()
+            }
+        }
+
+        if attempt >= Self.frontmostMaxAttempts {
+            postCommandV()
+            return
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.frontmostPollInterval) { [weak self] in
+            self?.waitUntilFrontmost(targetPID: targetPID, attempt: attempt + 1)
+        }
+    }
+
     private func postCommandV() {
         let source = CGEventSource(stateID: .combinedSessionState)
+        // Avoid HisCopy swallowing the synthetic ⌘V while modifiers settle.
+        source?.setLocalEventsFilterDuringSuppressionState(
+            [.permitLocalMouseEvents, .permitSystemDefinedEvents],
+            state: .eventSuppressionStateSuppressionInterval
+        )
         let keyCodeV: CGKeyCode = 0x09 // kVK_ANSI_V
 
         guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCodeV, keyDown: true),
