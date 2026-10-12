@@ -50,11 +50,12 @@ def is_version_newer(lhs: str, rhs: str) -> bool:
 
 
 def test_versions() -> None:
+    assert is_version_newer("0.4.3", "0.4.2")
     assert is_version_newer("0.4.2", "0.4.1")
     assert is_version_newer("1.0.0", "0.9.9")
-    assert not is_version_newer("0.4.1", "0.4.2")
-    assert not is_version_newer("0.4.2", "0.4.2")
-    assert is_version_newer("v0.4.2", "0.4.1")
+    assert not is_version_newer("0.4.2", "0.4.3")
+    assert not is_version_newer("0.4.3", "0.4.3")
+    assert is_version_newer("v0.4.3", "0.4.2")
     print("OK version compare")
 
 
@@ -82,7 +83,7 @@ def test_stage_flow() -> None:
         td_path = Path(td)
         payload = td_path / "payload"
         payload.mkdir()
-        make_fake_app(payload, "0.4.2")
+        make_fake_app(payload, "0.4.3")
         zip_path = td_path / "HisCopy.zip"
         with zipfile.ZipFile(zip_path, "w") as zf:
             for f in payload.rglob("*"):
@@ -103,7 +104,7 @@ def test_stage_flow() -> None:
 
         info = plistlib.loads((new_app / "Contents" / "Info.plist").read_bytes())
         assert info["CFBundleIdentifier"] == "io.github.bianyanhui.HisCopy"
-        assert is_version_newer(info["CFBundleShortVersionString"], "0.4.1")
+        assert is_version_newer(info["CFBundleShortVersionString"], "0.4.2")
 
         staging = td_path / "HisCopy-new.app"
         shutil.copytree(new_app, staging)
@@ -154,11 +155,31 @@ def test_hotkey_contract() -> None:
     print("OK hotkey contract (Pressed only, Gate unlock ≠ close, no menu equiv)")
 
 
+
+def test_select_newest_on_open_contract() -> None:
+    panel = (ROOT / "HisCopy" / "Views" / "HistoryPanelView.swift").read_text()
+    assert "selectNewest" in panel
+    assert "ScrollViewReader" in panel
+    assert "scrollTo" in panel
+    assert "hisCopyHistoryPanelDidOpen" in panel
+    assert "scrollNonce" in panel
+    # 清空搜索也要回到最新
+    assert "clearSearch" in panel
+
+    paste = (ROOT / "HisCopy" / "Paste" / "PasteController.swift").read_text()
+    assert "hisCopyHistoryPanelDidOpen" in paste
+
+    app = (ROOT / "HisCopy" / "AppDelegate.swift").read_text()
+    assert "hisCopyHistoryPanelDidOpen" in app
+    assert "NotificationCenter.default.post(name: .hisCopyHistoryPanelDidOpen" in app
+    print("OK select-newest-on-open contract")
+
 def main() -> None:
     test_versions()
     test_stage_flow()
     test_helper_script_shape()
     test_hotkey_contract()
+    test_select_newest_on_open_contract()
     print("ALL SELFTESTS PASSED")
 
 

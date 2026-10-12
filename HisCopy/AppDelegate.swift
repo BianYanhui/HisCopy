@@ -256,6 +256,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         installPanelDismissMonitors()
+        // 每次打开（含 orderOut 后复用）通知面板：选中最新并滚到顶。
+        NotificationCenter.default.post(name: .hisCopyHistoryPanelDidOpen, object: nil)
     }
 
     /// Esc 与点击外部关闭面板（再次 ⇧⌘V / 粘贴成功另有路径）。

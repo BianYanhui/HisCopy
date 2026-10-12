@@ -7,6 +7,8 @@ struct HistoryPanelView: View {
     @State private var searchText = ""
     @State private var selection: UUID?
     @State private var appeared = false
+    /// 递增以请求 List 滚到当前 selection（打开面板 / 清空搜索）。
+    @State private var scrollNonce = 0
 
     private var filtered: [ClipboardItem] {
         store.filtered(search: searchText)
@@ -49,13 +51,38 @@ struct HistoryPanelView: View {
             withAnimation(.easeOut(duration: 0.18)) {
                 appeared = true
             }
-            if selection == nil {
-                selection = filtered.first?.id
-            }
+            // 首次挂载：选中最新并滚到顶。
+            selectNewest(clearSearch: false)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .hisCopyHistoryPanelDidOpen)) { _ in
+            // 窗口复用（orderOut 后再打开）时 onAppear 不会再跑：清空搜索并回到最新。
+            selectNewest(clearSearch: true)
         }
         .onChange(of: searchText) { _ in
-            if let selection, filtered.contains(where: { $0.id == selection }) { return }
-            selection = filtered.first?.id
+            let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if q.isEmpty {
+                selectNewest(clearSearch: false)
+            } else if selection == nil || !filtered.contains(where: { $0.id == selection }) {
+                selection = filtered.first?.id
+                scrollNonce += 1
+            }
+        }
+    }
+
+    /// 选中列表第一条（最新）并请求滚到顶部。
+    private func selectNewest(clearSearch: Bool) {
+        if clearSearch {
+            searchText = ""
+        }
+        let items = store.filtered(search: clearSearch ? "" : searchText)
+        selection = items.first?.id
+        scrollNonce += 1
+    }
+
+    private func scrollSelectionToTop(using proxy: ScrollViewProxy) {
+        guard let id = selection ?? filtered.first?.id else { return }
+        DispatchQueue.main.async {
+            proxy.scrollTo(id, anchor: .top)
         }
     }
 
@@ -121,44 +148,53 @@ struct HistoryPanelView: View {
                 systemImage: store.items.isEmpty ? "doc.on.clipboard" : "magnifyingglass"
             )
         } else {
-            List(selection: $selection) {
-                ForEach(filtered) { item in
-                    HistoryRow(item: item)
-                        .tag(item.id)
-                        .contentShape(Rectangle())
-                        .contextMenu {
-                            Button {
-                                pastePlain(item)
-                            } label: {
-                                Label("粘贴纯文本（⌘V）", systemImage: "doc.plaintext")
+            ScrollViewReader { proxy in
+                List(selection: $selection) {
+                    ForEach(filtered) { item in
+                        HistoryRow(item: item)
+                            .tag(item.id)
+                            .id(item.id)
+                            .contentShape(Rectangle())
+                            .contextMenu {
+                                Button {
+                                    pastePlain(item)
+                                } label: {
+                                    Label("粘贴纯文本（⌘V）", systemImage: "doc.plaintext")
+                                }
+                                Button {
+                                    pasteFormatted(item)
+                                } label: {
+                                    Label("粘贴原文（↩）", systemImage: "doc.richtext")
+                                }
+                                Button {
+                                    store.copyToPasteboard(item)
+                                } label: {
+                                    Label("仅复制到剪贴板", systemImage: "doc.on.doc")
+                                }
+                                Divider()
+                                Button(role: .destructive) {
+                                    store.remove(id: item.id)
+                                    if selection == item.id { selection = nil }
+                                } label: {
+                                    Label("删除", systemImage: "trash")
+                                }
                             }
-                            Button {
-                                pasteFormatted(item)
-                            } label: {
-                                Label("粘贴原文（↩）", systemImage: "doc.richtext")
-                            }
-                            Button {
-                                store.copyToPasteboard(item)
-                            } label: {
-                                Label("仅复制到剪贴板", systemImage: "doc.on.doc")
-                            }
-                            Divider()
-                            Button(role: .destructive) {
-                                store.remove(id: item.id)
-                                if selection == item.id { selection = nil }
-                            } label: {
-                                Label("删除", systemImage: "trash")
-                            }
+                    }
+                    .onDelete { indexSet in
+                        for index in indexSet {
+                            store.remove(id: filtered[index].id)
                         }
-                }
-                .onDelete { indexSet in
-                    for index in indexSet {
-                        store.remove(id: filtered[index].id)
                     }
                 }
+                .listStyle(.inset)
+                .listRowSeparator(.visible)
+                .onAppear {
+                    scrollSelectionToTop(using: proxy)
+                }
+                .onChange(of: scrollNonce) { _ in
+                    scrollSelectionToTop(using: proxy)
+                }
             }
-            .listStyle(.inset)
-            .listRowSeparator(.visible)
         }
     }
 
