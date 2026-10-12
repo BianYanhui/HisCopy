@@ -119,15 +119,25 @@ def test_stage_flow() -> None:
 def test_helper_script_shape() -> None:
     src = (ROOT / "HisCopy" / "Updater" / "AppUpdater.swift").read_text()
     assert "nohup" in src
-    assert "HISCOPY_UPDATER_DETACHED" in src
+    assert "HISCOPY_UPDATER_PID" in src
+    assert "HISCOPY_UPDATER_SRC" in src
+    assert "HISCOPY_UPDATER_DST" in src
+    assert "HISCOPY_UPDATER_RUNNING" in src
+    # Paths must not be interpolated into the script body (spaces / metachar break bash).
+    assert 'SRC="\\(sourceApp.path)"' not in src
+    assert 'DST="\\(installApp.path)"' not in src
     assert "Task.detached" in src
     assert "stageDownloadedUpdate" in src
-    assert "waitUntilExit" in src  # brief bootstrap wait only inside helper launch
+    assert "waitUntilExit" in src
+    assert "posixPermissions" in src
+    assert "isExecutableFile" in src
+    assert "/usr/bin/nohup /bin/bash" in src
+    assert "\"$1\"" in src  # Swift source escapes quotes around $1
     # long IO helpers are nonisolated / off main
     assert "nonisolated private static func stageDownloadedUpdate" in src
     assert "nonisolated private static func unzip" in src
     assert "nonisolated private static func launchReplacementScript" in src
-    print("OK updater source shape (background IO + nohup helper)")
+    print("OK updater source shape (env paths + Swift-side nohup)")
 
 
 def test_hotkey_contract() -> None:

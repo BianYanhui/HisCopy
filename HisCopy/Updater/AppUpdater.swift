@@ -217,7 +217,7 @@ final class AppUpdater: ObservableObject {
             )
         }.value
 
-        // helper 首段仅 nohup 再 exec 后立刻退出；短暂 wait 确保子进程已起来。
+        // Swift 侧 nohup 拉起安装脚本后立刻返回；短暂 wait 确保子进程已起来。
         try await Task.detached(priority: .userInitiated) {
             try Self.launchReplacementScript(
                 sourceApp: staging,
@@ -374,31 +374,36 @@ final class AppUpdater: ObservableObject {
 
     /// Spawns a detached helper that waits for this PID to exit, then installs
     /// the new app (without ever deleting the live bundle beforehand).
+    ///
+    /// ## Why this launch path (v0.4.4)
+    /// Older code interpolated absolute paths into the script body and started
+    /// `/bin/bash script`, which re-exec'd via `nohup … "$0" &`. That surfaced
+    /// as UpdateError.helperFailed when:
+    /// - a path contained spaces or shell metacharacters (script parse → non-zero),
+    /// - `Process.run()` threw (permission / posix_spawn) and was not mapped, or
+    /// - the script lacked a clean shebang at byte 0 / executable bit.
+    /// Fix: pass SRC/DST/RUNNING/PID only via environment (no shell parsing of
+    /// paths), write LF-only UTF-8 with shebang at offset 0 + chmod 0755,
+    /// and have Swift start `nohup /bin/bash "$1"` so bootstrap exits after backgrounding.
     nonisolated private static func launchReplacementScript(
         sourceApp: URL,
         installApp: URL,
         runningApp: URL,
         pid: Int32
     ) throws {
-        let scriptURL = FileManager.default.temporaryDirectory
+        let fm = FileManager.default
+        let scriptURL = fm.temporaryDirectory
             .appendingPathComponent("HisCopy-install-\(UUID().uuidString).sh")
 
-        // Paths embedded below are absolute UUID temp paths — no user-controlled spaces
-        // beyond standard macOS locations; still quote every expansion in the script.
+        // Paths come from the process environment — never interpolate into the
+        // script text (home dirs / Applications paths often contain spaces).
         let script = """
         #!/bin/bash
-        # Detach from the app's process group so exit(0) / SIGHUP cannot kill us.
-        if [ "${HISCOPY_UPDATER_DETACHED:-}" != "1" ]; then
-          export HISCOPY_UPDATER_DETACHED=1
-          /usr/bin/nohup /bin/bash "$0" >/dev/null 2>&1 &
-          exit 0
-        fi
-
         set -e
-        PID="\(pid)"
-        SRC="\(sourceApp.path)"
-        DST="\(installApp.path)"
-        RUNNING="\(runningApp.path)"
+        PID="${HISCOPY_UPDATER_PID:?}"
+        SRC="${HISCOPY_UPDATER_SRC:?}"
+        DST="${HISCOPY_UPDATER_DST:?}"
+        RUNNING="${HISCOPY_UPDATER_RUNNING:?}"
         LOG="$HOME/Library/Logs/HisCopy-update.log"
         mkdir -p "$(dirname "$LOG")"
         exec >>"$LOG" 2>&1
@@ -457,20 +462,51 @@ final class AppUpdater: ObservableObject {
         echo "$(date) updater done"
         """
 
-        try script.write(to: scriptURL, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o755],
+        // Ensure LF-only bytes and shebang at offset 0 (no UTF-8 BOM / CRLF).
+        guard let scriptData = script.data(using: .utf8) else {
+            throw UpdateError.helperFailed
+        }
+        try scriptData.write(to: scriptURL, options: .atomic)
+        try fm.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o755))],
             ofItemAtPath: scriptURL.path
         )
+        guard fm.isExecutableFile(atPath: scriptURL.path) else {
+            throw UpdateError.helperFailed
+        }
+
+        // Resolve path without percent-encoding; spaces stay as real spaces in argv/$1.
+        let scriptPath = scriptURL.path
+        let sourcePath = sourceApp.path
+        let installPath = installApp.path
+        let runningPath = runningApp.path
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = [scriptURL.path]
+        // $1 carries the script path so spaces never split argv; nohup+& detaches
+        // before this short-lived bash exits — immune to our later exit(0)/SIGHUP.
+        process.arguments = [
+            "-c",
+            "/usr/bin/nohup /bin/bash \"$1\" >/dev/null 2>&1 &",
+            "--",
+            scriptPath,
+        ]
+        var env = ProcessInfo.processInfo.environment
+        env["HISCOPY_UPDATER_PID"] = String(pid)
+        env["HISCOPY_UPDATER_SRC"] = sourcePath
+        env["HISCOPY_UPDATER_DST"] = installPath
+        env["HISCOPY_UPDATER_RUNNING"] = runningPath
+        process.environment = env
+        process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        try process.run()
-        // First invocation only re-execs under nohup and exits; wait for that so
-        // the detached child exists before we exit(0).
+
+        do {
+            try process.run()
+        } catch {
+            throw UpdateError.helperFailed
+        }
+        // Outer bash -c only backgrounds nohup and returns immediately.
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
             throw UpdateError.helperFailed
