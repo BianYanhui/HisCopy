@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 /// 点击后监听下一组修饰键+按键，写入全局热键（无第三方依赖）。
+/// Visual: keycap-style field inspired by Pulse ShortcutField (ideas only).
 struct HotKeyRecorderView: View {
     @ObservedObject private var manager = GlobalHotKeyManager.shared
     @State private var isRecording = false
@@ -9,21 +10,47 @@ struct HotKeyRecorderView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 Button {
                     toggleRecording()
                 } label: {
-                    Text(isRecording ? "按下新快捷键…" : manager.shortcut.displayString)
-                        .font(.body.monospaced())
-                        .frame(minWidth: 120, alignment: .center)
+                    HStack(spacing: 8) {
+                        Image(systemName: isRecording ? "keyboard.fill" : "keyboard")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(isRecording ? Color.accentColor : Color.secondary)
+                        Text(isRecording ? "按下新快捷键…" : manager.shortcut.displayString)
+                            .font(.system(.body, design: .rounded).monospaced())
+                            .foregroundStyle(isRecording ? Color.accentColor : Color.primary)
+                            .frame(minWidth: 100, alignment: .leading)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(isRecording
+                                  ? Color.accentColor.opacity(0.10)
+                                  : Color.primary.opacity(0.05))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(
+                                isRecording
+                                    ? Color.accentColor.opacity(0.45)
+                                    : Color.primary.opacity(0.10),
+                                lineWidth: 0.5
+                            )
+                    )
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.plain)
                 .help(isRecording ? "按下包含修饰键的组合；Esc 取消" : "点击后按下新的全局快捷键")
 
                 Button("恢复默认") {
                     stopRecording()
                     manager.resetToDefault()
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
                 .disabled(isRecording || manager.shortcut == .default)
             }
 
