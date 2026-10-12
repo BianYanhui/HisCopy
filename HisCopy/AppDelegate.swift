@@ -285,11 +285,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func installPanelDismissMonitors() {
         tearDownPanelDismissMonitors()
 
-        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self else { return event }
-            // kVK_Escape = 53
+        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // kVK_Escape = 53 — let the panel dismiss search first, then close.
             if event.keyCode == 53 {
-                self.hideHistoryPanel()
+                NotificationCenter.default.post(name: .hisCopyPanelEscapeRequested, object: nil)
                 return nil
             }
             return event

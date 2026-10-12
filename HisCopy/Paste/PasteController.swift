@@ -9,6 +9,8 @@ extension Notification.Name {
     static let hisCopyPrepareForPaste = Notification.Name("HisCopyPrepareForPaste")
     /// 历史面板已展示（含窗口复用再次打开）：UI 应选中最新并滚到顶。
     static let hisCopyHistoryPanelDidOpen = Notification.Name("HisCopyHistoryPanelDidOpen")
+    /// Esc：由面板决定是退出搜索还是关闭窗口。
+    static let hisCopyPanelEscapeRequested = Notification.Name("HisCopyPanelEscapeRequested")
 }
 
 /// 将条目写回剪贴板后，用 Accessibility / CGEvent 向前置 App 发送 ⌘V。
