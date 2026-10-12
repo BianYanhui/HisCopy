@@ -83,20 +83,29 @@ struct SettingsView: View {
                         Circle()
                             .fill(pasteController.isAccessibilityTrusted ? Color.green.opacity(0.85) : Color.orange)
                             .frame(width: 7, height: 7)
-                        Text(pasteController.isAccessibilityTrusted ? "已授权" : "未授权")
+                        Text(pasteController.isAccessibilityTrusted ? "已授权（本进程）" : "未授权（本进程）")
                             .foregroundStyle(pasteController.isAccessibilityTrusted ? Color.secondary : Color.orange)
                     }
+                }
+                if let hint = pasteController.trustHint {
+                    Text(hint)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Button("打开「隐私与安全性 → 辅助功能」…") {
                     pasteController.openAccessibilitySettings()
                 }
                 Button("重新检查权限") {
-                    pasteController.refreshAccessibilityStatus()
+                    _ = pasteController.refreshAccessibilityStatus(prompt: false)
+                }
+                Button("请求系统授权对话框…") {
+                    _ = pasteController.refreshAccessibilityStatus(prompt: true)
                 }
             } header: {
                 Label("粘贴", systemImage: "doc.on.clipboard.fill")
             } footer: {
-                Text("一键粘贴使用 Accessibility / CGEvent 模拟 ⌘V。未授权时仅写入剪贴板，并提示前往系统设置授权。可在「系统设置 → 隐私与安全性 → 辅助功能」中勾选 HisCopy。")
+                Text("一键粘贴用 Accessibility / CGEvent 模拟 ⌘V。状态针对「当前正在运行的这份」HisCopy：ad-hoc 更新后系统列表里勾选的可能是旧二进制，会出现「设置里已开、这里仍显示未授权」。请删除列表中所有 HisCopy 后重新添加当前 .app，并重启应用。粘贴时仍会尝试发送 ⌘V，不因该指示灯而放弃。")
             }
 
             Section {
@@ -142,7 +151,7 @@ struct SettingsView: View {
         .onAppear {
             // Normalize before first paint so Stepper `in:` always contains value.
             store.setRetentionAgeUnit(store.retentionAgeUnit)
-            pasteController.refreshAccessibilityStatus()
+            _ = pasteController.refreshAccessibilityStatus(prompt: false)
         }
     }
 }

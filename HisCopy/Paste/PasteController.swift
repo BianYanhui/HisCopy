@@ -3,68 +3,53 @@ import ApplicationServices
 import Combine
 
 extension Notification.Name {
-    /// 请求隐藏历史面板。
     static let hisCopyHideHistoryPanel = Notification.Name("HisCopyHideHistoryPanel")
-    /// 粘贴前：隐藏面板并恢复先前前置应用焦点。
     static let hisCopyPrepareForPaste = Notification.Name("HisCopyPrepareForPaste")
-    /// 历史面板已展示（含窗口复用再次打开）：UI 应选中最新并滚到顶。
     static let hisCopyHistoryPanelDidOpen = Notification.Name("HisCopyHistoryPanelDidOpen")
-    /// Esc：由面板决定是退出搜索还是关闭窗口。
     static let hisCopyPanelEscapeRequested = Notification.Name("HisCopyPanelEscapeRequested")
-    /// userInfo["delta"] as Int: −1 up / +1 down when search is unfocused.
     static let hisCopyPanelMoveSelection = Notification.Name("HisCopyPanelMoveSelection")
 }
 
-/// 将条目写回剪贴板后，用 Accessibility / CGEvent 向前置 App 发送 ⌘V。
-/// 无辅助功能权限时降级为仅写入剪贴板，并引导用户到系统设置授权。
+/// Pastes via CGEvent ⌘V. Trust API can false-negative for ad-hoc builds (TCC tied to
+/// code signature / cdhash; System Settings may still show an older HisCopy as ON).
+/// We always attempt CGEvent; the published trust flag is informational + guidance only.
 @MainActor
 final class PasteController: ObservableObject {
     static let shared = PasteController()
 
-    private static let didGuideAccessibilityKey = "HisCopy.didGuideAccessibility"
-    /// Poll interval while waiting for the destination app to become frontmost.
     private static let frontmostPollInterval: TimeInterval = 0.02
-    /// Max wait (~500ms) before posting ⌘V anyway.
-    private static let frontmostMaxAttempts = 25
-    /// Brief settle after frontmost so the key window / field accepts keystrokes.
-    private static let postFrontmostSettle: TimeInterval = 0.03
+    private static let frontmostMaxAttempts = 40
+    private static let postFrontmostSettle: TimeInterval = 0.05
+    private static let quickPasteDelay: TimeInterval = 0.05
 
     @Published private(set) var isAccessibilityTrusted: Bool
+    /// Extra hint when Settings may show ON but this binary is not trusted (ad-hoc update).
+    @Published private(set) var trustHint: String?
 
     private init() {
-        isAccessibilityTrusted = AXIsProcessTrusted()
+        isAccessibilityTrusted = Self.queryTrusted(prompt: false)
+        trustHint = isAccessibilityTrusted ? nil : Self.staleTCCHint
     }
 
-    /// 刷新辅助功能信任状态（从设置返回时可调用）。
-    func refreshAccessibilityStatus() {
-        isAccessibilityTrusted = AXIsProcessTrusted()
-    }
-
-    /// 当前进程是否已获辅助功能授权。
-    func checkAccessibilityTrusted(promptSystemDialog: Bool = false) -> Bool {
-        if promptSystemDialog {
-            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-            let trusted = AXIsProcessTrustedWithOptions(options)
-            isAccessibilityTrusted = trusted
-            return trusted
-        }
-        let trusted = AXIsProcessTrusted()
+    /// Prefer `AXIsProcessTrustedWithOptions` — more reliable than bare `AXIsProcessTrusted`
+    /// after the user toggles Privacy settings without relaunching.
+    @discardableResult
+    func refreshAccessibilityStatus(prompt: Bool = false) -> Bool {
+        let trusted = Self.queryTrusted(prompt: prompt)
         isAccessibilityTrusted = trusted
+        trustHint = trusted ? nil : Self.staleTCCHint
         return trusted
     }
 
-    /// 内容已由调用方写入剪贴板；关闭面板并尝试 ⌘V 粘贴到前置应用。
-    /// - Returns: `true` 表示已发出粘贴事件；`false` 表示仅写入剪贴板（无权限或失败）。
+    func checkAccessibilityTrusted(promptSystemDialog: Bool = false) -> Bool {
+        refreshAccessibilityStatus(prompt: promptSystemDialog)
+    }
+
+    /// Content already on pasteboard. Hide panel and **always** synthesize ⌘V.
+    /// Do not bail on a flaky trust bool — that was why v0.7.1 looked like a focus bug.
     @discardableResult
     func pasteToFrontmostAppAndClose() -> Bool {
-        refreshAccessibilityStatus()
-
-        guard isAccessibilityTrusted else {
-            presentAccessibilityGuidance()
-            // 无权限：仍关闭面板（内容已在剪贴板，可手动 ⌘V）。
-            NotificationCenter.default.post(name: .hisCopyHideHistoryPanel, object: nil)
-            return false
-        }
+        let reportedTrusted = refreshAccessibilityStatus(prompt: false)
 
         NotificationCenter.default.post(
             name: .hisCopyPrepareForPaste,
@@ -73,11 +58,26 @@ final class PasteController: ObservableObject {
         )
 
         let targetPID = PasteFocusCoordinator.shared.targetPID
-        waitUntilFrontmost(targetPID: targetPID, attempt: 0)
+        if PasteFocusCoordinator.shared.destinationIsFrontmost || targetPID == nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.quickPasteDelay) { [weak self] in
+                self?.postCommandV()
+            }
+        } else {
+            _ = PasteFocusCoordinator.shared.restoreDestinationAppIfNeeded()
+            waitUntilFrontmost(targetPID: targetPID, attempt: 0)
+        }
+
+        if !reportedTrusted {
+            // After paste attempt: prompt so TCC can register *this* binary, then guide if still false.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self else { return }
+                if self.refreshAccessibilityStatus(prompt: true) { return }
+                self.presentAccessibilityGuidance()
+            }
+        }
         return true
     }
 
-    /// 打开「系统设置 → 隐私与安全性 → 辅助功能」。
     func openAccessibilitySettings() {
         let candidates = [
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
@@ -95,28 +95,34 @@ final class PasteController: ObservableObject {
 
     // MARK: - Private
 
-    /// Wait until the captured destination app is frontmost, then synthesize ⌘V.
-    /// A fixed delay alone races activation and lands paste in HisCopy / nowhere.
+    private static let staleTCCHint = "系统列表里勾选的可能是旧版 HisCopy（ad-hoc 签名每次更新都会变）。请删除列表中所有 HisCopy，再重新添加当前应用并重启。"
+
+    private static func queryTrusted(prompt: Bool) -> Bool {
+        let options = [
+            kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: prompt
+        ] as CFDictionary
+        // WithOptions is the supported probe; also OR bare API in case of SDK quirks.
+        let withOptions = AXIsProcessTrustedWithOptions(options)
+        let bare = AXIsProcessTrusted()
+        return withOptions || bare
+    }
+
     private func waitUntilFrontmost(targetPID: pid_t?, attempt: Int) {
         if let targetPID {
-            let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-            if frontPID == targetPID {
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID {
                 DispatchQueue.main.asyncAfter(deadline: .now() + Self.postFrontmostSettle) { [weak self] in
                     self?.postCommandV()
                 }
                 return
             }
-            // Activation can lag; nudge again a few times.
-            if attempt == 5 || attempt == 15 {
-                _ = PasteFocusCoordinator.shared.restoreDestinationApp()
+            if attempt == 5 || attempt == 15 || attempt == 25 {
+                _ = PasteFocusCoordinator.shared.restoreDestinationAppIfNeeded()
             }
         }
-
         if attempt >= Self.frontmostMaxAttempts {
             postCommandV()
             return
         }
-
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.frontmostPollInterval) { [weak self] in
             self?.waitUntilFrontmost(targetPID: targetPID, attempt: attempt + 1)
         }
@@ -124,42 +130,40 @@ final class PasteController: ObservableObject {
 
     private func postCommandV() {
         let source = CGEventSource(stateID: .combinedSessionState)
-        // Avoid HisCopy swallowing the synthetic ⌘V while modifiers settle.
         source?.setLocalEventsFilterDuringSuppressionState(
             [.permitLocalMouseEvents, .permitSystemDefinedEvents],
             state: .eventSuppressionStateSuppressionInterval
         )
-        let keyCodeV: CGKeyCode = 0x09 // kVK_ANSI_V
-
+        let keyCodeV: CGKeyCode = 0x09
         guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCodeV, keyDown: true),
               let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCodeV, keyDown: false) else {
             return
         }
         keyDown.flags = .maskCommand
         keyUp.flags = .maskCommand
-        keyDown.post(tap: .cghidEventTap)
-        keyUp.post(tap: .cghidEventTap)
+        keyDown.post(tap: .cgSessionEventTap)
+        keyUp.post(tap: .cgSessionEventTap)
     }
 
     private func presentAccessibilityGuidance() {
-        let alreadyGuided = UserDefaults.standard.bool(forKey: Self.didGuideAccessibilityKey)
-        guard !alreadyGuided else { return }
-
-        UserDefaults.standard.set(true, forKey: Self.didGuideAccessibilityKey)
-        _ = checkAccessibilityTrusted(promptSystemDialog: true)
-
         let alert = NSAlert()
-        alert.messageText = "需要辅助功能权限才能一键粘贴"
+        alert.messageText = "辅助功能未对本版本生效"
         alert.informativeText = """
-        已将所选内容写入剪贴板。若要自动向前置应用发送 ⌘V，请在「系统设置 → 隐私与安全性 → 辅助功能」中允许 HisCopy。
+        已将内容写入剪贴板，并已尝试自动粘贴。
 
-        授权前可手动 ⌘V 完成粘贴。可随时在 HisCopy 设置中重新检查权限或打开系统设置。
+        若系统设置里 HisCopy 已勾选，但本应用仍显示「未授权」，通常是 ad-hoc 签名更新后 TCC 仍绑定旧二进制：
+
+        1. 打开「系统设置 → 隐私与安全性 → 辅助功能」
+        2. 删除列表中所有 HisCopy 条目
+        3. 点击「+」重新添加当前 HisCopy.app
+        4. 完全退出并重新打开 HisCopy，再点「重新检查权限」
+
+        授权前可回到原输入框手动 ⌘V。
         """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "打开系统设置")
         alert.addButton(withTitle: "知道了")
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
+        if alert.runModal() == .alertFirstButtonReturn {
             openAccessibilitySettings()
         }
     }
