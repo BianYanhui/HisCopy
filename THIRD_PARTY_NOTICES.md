@@ -14,7 +14,7 @@ Files that contain Pulse code keep Pulse's copyright header and state what HisCo
 | `HisCopy/Panel/PanelSurface.swift` | `Sources/Pulse/Panel/PanelSurface.swift` | Modified (no macOS 26 glass branch, no `Path.normalized`) |
 | `HisCopy/Panel/DockBerthShape.swift` | `DockBerthShape` in `Sources/Pulse/Panel/UsageDockView.swift`; `PanelEdge` / `DockLayout` constants | Modified |
 | `HisCopy/Panel/DockPlacement.swift` | `Sources/Pulse/Panel/PanelPlacement.swift` | Adapted |
-| `HisCopy/Panel/DockedPanelController.swift` | Mechanisms from `FloatingPanelController.swift`, `PanelPointerWatcher.swift`, `UsageDockView.swift` | Adapted |
+| `HisCopy/Panel/DockedPanelController.swift` | Mechanisms from `FloatingPanelController.swift`, `PanelPointerWatcher.swift`, `UsageDockView.swift` | Adapted (v0.8.1: separate sliver window using Pulse's collapsed berth and `PanelGlass.claim`) |
 | `HisCopy/Views/Styles.swift` | Type scale, spacing, opacity hierarchy, animation parameters and colours from `UsageDetailCard.swift`, `UsageDockView.swift`, `UsageTint.swift` | Modified |
 
 HisCopy does not use Pulse's name, logo or app icon.

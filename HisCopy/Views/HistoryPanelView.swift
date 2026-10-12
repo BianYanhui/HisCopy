@@ -21,6 +21,8 @@ struct HistoryPanelView: View {
     @StateObject private var arrowKeyMonitor = PanelListArrowKeyMonitor()
     /// Debounce Carbon hotkey + local monitor both firing.
     @State private var lastPasteAt: Date?
+    /// Preview of the selected row (v0.8.1); toggled from the header.
+    @AppStorage("panel.preview.enabled") private var showsPreview = true
 
     private var filtered: [ClipboardItem] {
         store.filtered(search: searchText)
@@ -33,6 +35,15 @@ struct HistoryPanelView: View {
             insetDivider
 
             content
+
+            if showsPreview, !filtered.isEmpty, let item = selectedItem() {
+                insetDivider
+                SelectionPreview(item: item)
+                    .frame(height: HisCopyStyle.previewHeight)
+                    .padding(.horizontal, HisCopyStyle.stripHorizontalPadding)
+                    .padding(.vertical, 10)
+                    .transition(.opacity)
+            }
 
             insetDivider
 
@@ -261,6 +272,15 @@ struct HistoryPanelView: View {
                 .accessibilityLabel(store.isPaused ? "已暂停捕获" : "捕获中")
 
                 PanelIconButton(
+                    systemName: showsPreview ? "eye" : "eye.slash",
+                    helpText: showsPreview ? "隐藏选中项预览" : "显示选中项预览"
+                ) {
+                    withAnimation(HisCopyStyle.selection) { showsPreview.toggle() }
+                }
+                .opacity(showsPreview ? 1 : 0.5)
+                .accessibilityLabel(showsPreview ? "隐藏预览" : "显示预览")
+
+                PanelIconButton(
                     systemName: "trash",
                     helpText: "清空全部历史（含收藏）",
                     disabled: store.items.isEmpty
@@ -332,16 +352,28 @@ struct HistoryPanelView: View {
     @ViewBuilder
     private var content: some View {
         if filtered.isEmpty {
-            EmptyHistoryState(
-                title: store.items.isEmpty ? "尚无历史" : "无匹配结果",
-                subtitle: store.isPaused
-                    ? "捕获已暂停"
-                    : (store.items.isEmpty ? "复制内容后会出现在这里" : "试试其他关键词"),
-                systemImage: store.items.isEmpty ? "doc.on.clipboard" : "magnifyingglass"
-            )
-            .transition(
-                .opacity.combined(with: .offset(y: -4))
-            )
+            if store.items.isEmpty {
+                EmptyHistoryState(
+                    title: "还没有历史",
+                    subtitle: store.isPaused
+                        ? "捕获已暂停，打开右上角开关后复制的内容会出现在这里"
+                        : "复制文本、图片或文件后会出现在这里",
+                    systemImage: store.isPaused ? "pause.circle" : "doc.on.clipboard"
+                )
+                .transition(.opacity.combined(with: .offset(y: -4)))
+            } else {
+                EmptyHistoryState(
+                    title: "没有匹配的结果",
+                    subtitle: "找不到包含「\(searchText.trimmingCharacters(in: .whitespacesAndNewlines))」的条目，试试其他关键词",
+                    systemImage: "magnifyingglass",
+                    actionTitle: "清除搜索",
+                    action: {
+                        searchText = ""
+                        searchFocused = false
+                    }
+                )
+                .transition(.opacity.combined(with: .offset(y: -4)))
+            }
         } else {
             ScrollViewReader { proxy in
                 List(selection: $selection) {

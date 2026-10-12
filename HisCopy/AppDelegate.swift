@@ -430,7 +430,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let window = NSWindow(contentViewController: hosting)
         window.title = "HisCopy 设置"
         window.styleMask = [.titled, .closable]
-        window.setContentSize(NSSize(width: 520, height: 660))
+        window.setContentSize(NSSize(width: 520, height: 720))
         window.isReleasedWhenClosed = false
         window.center()
         settingsWindow = window

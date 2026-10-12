@@ -62,7 +62,7 @@ struct DockPlacement: Equatable {
     /// Pulse `PanelPlacement.layout(in:)`: flush to the edge of `visibleFrame`,
     /// positioned along it by `ratio`.
     func frame(on screen: NSScreen) -> CGRect {
-        let visible = screen.visibleFrame
+        let visible = Self.dockableFrame(of: screen)
         let size = Self.berthSize(for: edge, in: visible)
         switch edge {
         case .left, .right:
@@ -74,6 +74,25 @@ struct DockPlacement: Equatable {
             let x = visible.minX + ratio * (visible.width - size.width)
             return CGRect(origin: CGPoint(x: x, y: y), size: size)
         }
+    }
+
+    /// `visibleFrame`, additionally kept below the camera housing and the menu
+    /// bar even when the menu bar auto-hides (then `visibleFrame` reaches the
+    /// very top and a top dock would sit under the notch). v0.8.1.
+    static func dockableFrame(of screen: NSScreen) -> CGRect {
+        var visible = screen.visibleFrame
+        var top = screen.frame.maxY - screen.safeAreaInsets.top
+        if let notch = PanelScreen.notch(of: screen) {
+            top = min(top, notch.minY)
+        }
+        if visible.maxY >= screen.frame.maxY - 1 {
+            // Auto-hidden menu bar: leave its height free so it can slide in over nothing.
+            top = min(top, screen.frame.maxY - NSStatusBar.system.thickness)
+        }
+        if visible.maxY > top {
+            visible.size.height = max(top - visible.minY, 0)
+        }
+        return visible
     }
 
     /// Pulse `ratios(forRailAt:)`: inverse of `frame(on:)` for a proposed origin.

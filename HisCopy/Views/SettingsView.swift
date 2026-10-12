@@ -1,7 +1,8 @@
 import SwiftUI
+import AppKit
 
 struct SettingsView: View {
-    @AppStorage("launchAtLogin") private var launchAtLogin = false
+    @ObservedObject private var launchAtLogin = LaunchAtLogin.shared
     @ObservedObject private var updater = AppUpdater.shared
     @ObservedObject private var store = ClipboardHistoryStore.shared
     @ObservedObject private var pasteController = PasteController.shared
@@ -152,11 +153,33 @@ struct SettingsView: View {
             }
 
             Section {
-                Toggle("开机时启动 HisCopy", isOn: $launchAtLogin)
+                Toggle("开机时启动 HisCopy", isOn: Binding(
+                    get: { launchAtLogin.isEnabled || launchAtLogin.requiresApproval },
+                    set: { launchAtLogin.setEnabled($0) }
+                ))
+
+                if launchAtLogin.requiresApproval {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("需在「系统设置 → 通用 → 登录项」中允许 HisCopy 后才会生效。")
+                            .font(.callout)
+                            .foregroundStyle(.orange)
+                        Spacer(minLength: 4)
+                        Button("打开登录项设置") { launchAtLogin.openLoginItemsSettings() }
+                    }
+                }
+
+                if let error = launchAtLogin.errorMessage {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(error)
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                        Button("打开登录项设置") { launchAtLogin.openLoginItemsSettings() }
+                    }
+                }
             } header: {
                 Label("通用", systemImage: "gearshape")
             } footer: {
-                Text("开机自启尚未接入系统服务，开关仅作偏好占位。")
+                Text("使用系统登录项（SMAppService）。状态读取自系统，可在「系统设置 → 通用 → 登录项」中查看或移除。建议把 HisCopy 放在「应用程序」文件夹后再开启。")
             }
 
             Section {
@@ -178,11 +201,15 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 660)
+        .frame(width: 520, height: 720)
         .onAppear {
             // Normalize before first paint so Stepper `in:` always contains value.
             store.setRetentionAgeUnit(store.retentionAgeUnit)
             _ = pasteController.refreshAccessibilityStatus(prompt: false)
+            launchAtLogin.refresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            launchAtLogin.refresh()
         }
     }
 }
