@@ -1,13 +1,11 @@
 import AppKit
 import ApplicationServices
 
-/// Remembers the destination app (and best-effort focused AX element) when the
-/// history panel opens, then restores that focus before synthesizing ⌘V.
+/// Captures the destination app when the history panel opens.
 ///
-/// Pattern used by clipboard managers: capture `NSWorkspace.frontmostApplication`
-/// before the panel becomes key; on paste, `activateIgnoringOtherApps` (and
-/// `activateAllWindows` so dialogs/key windows return), poll until that PID is
-/// frontmost, optionally re-focus the AX element, then post ⌘V.
+/// With a `.nonactivatingPanel`, HisCopy should never become frontmost, so paste
+/// usually needs no restore. This coordinator is the **fallback** when something
+/// still activated us (search click edge cases, older macOS quirks, Settings open).
 @MainActor
 final class PasteFocusCoordinator {
     static let shared = PasteFocusCoordinator()
@@ -17,12 +15,11 @@ final class PasteFocusCoordinator {
 
     private init() {}
 
-    /// Call while the destination app is still frontmost (before panel key/orderFront).
+    /// Call before ordering the panel front (destination should still be frontmost).
     func captureFromFrontmostApplication() {
         let front = NSWorkspace.shared.frontmostApplication
         guard let front,
               front.bundleIdentifier != Bundle.main.bundleIdentifier else {
-            // Keep any previously captured target (e.g. HisCopy already key).
             return
         }
         targetPID = front.processIdentifier
@@ -46,10 +43,15 @@ final class PasteFocusCoordinator {
         focusedElement = nil
     }
 
-    /// Hide is handled by the caller. Reactivate the captured app and try to
-    /// restore its focused AX element (dialogs / text fields).
+    /// True when the captured destination is already the frontmost app.
+    var destinationIsFrontmost: Bool {
+        guard let pid = targetPID else { return false }
+        return NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
+    }
+
+    /// Reactivate destination only if we are not already there.
     @discardableResult
-    func restoreDestinationApp() -> pid_t? {
+    func restoreDestinationAppIfNeeded() -> pid_t? {
         guard let pid = targetPID else { return nil }
         let app = NSWorkspace.shared.runningApplications.first(where: { $0.processIdentifier == pid })
         guard let app, !app.isTerminated else {
@@ -57,7 +59,6 @@ final class PasteFocusCoordinator {
             return nil
         }
 
-        // Already frontmost: skip re-activate (can drop first responder in Electron).
         if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
             activate(app)
         }
@@ -74,8 +75,6 @@ final class PasteFocusCoordinator {
 
     private func activate(_ app: NSRunningApplication) {
         if #available(macOS 14.0, *) {
-            // Yield from HisCopy; activateAllWindows restores sheets/dialogs as key.
-            // SDK label is `from:` (ObjC: fromApplication:).
             _ = app.activate(from: NSRunningApplication.current, options: [.activateAllWindows])
             if NSWorkspace.shared.frontmostApplication?.processIdentifier != app.processIdentifier {
                 _ = app.activate()

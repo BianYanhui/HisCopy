@@ -1,14 +1,18 @@
 import AppKit
 import Combine
 
-/// 防止「⇧⌘V 呼出面板」与面板内「⌘V 粘贴纯文本」抢同一物理按键序列。
+extension Notification.Name {
+    /// Armed panel: paste plain text for current selection (⌘V).
+    static let hisCopyPanelPastePlain = Notification.Name("HisCopyPanelPastePlain")
+    /// Armed panel: paste formatted for current selection (Return).
+    static let hisCopyPanelPasteFormatted = Notification.Name("HisCopyPanelPasteFormatted")
+}
+
+/// Prevents the open hotkey chord from firing panel paste, then routes ⌘V / Return
+/// via local monitor (reliable for `.nonactivatingPanel` where SwiftUI
+/// `.keyboardShortcut` may not run because HisCopy is not the active app).
 ///
-/// Carbon 热键在 keyDown 时已打开面板；若此时仍按着 ⌘/V（常见：先松 ⇧），
-/// 面板成为 key window 后会把后续 key-repeat 或残余 ⌘V 当成粘贴快捷键。
-/// 本闸门在打开后禁用面板粘贴快捷键，直到修饰键与 V 全部松开。
-///
-/// **解锁（arm）只恢复面板内 ⌘V/回车，绝不隐藏面板。** 关面板由再次热键、
-/// Esc、粘贴成功、点外部等路径负责。
+/// **Unlock (arm) only enables paste routing; never hides the panel.**
 @MainActor
 final class PanelPasteShortcutGate: ObservableObject {
     static let shared = PanelPasteShortcutGate()
@@ -19,49 +23,56 @@ final class PanelPasteShortcutGate: ObservableObject {
     private var pollWorkItem: DispatchWorkItem?
     private var armingStartedAt: Date?
 
-    /// 轮询间隔（监控器漏事件时的兜底）。
     private static let pollInterval: TimeInterval = 0.05
-    /// 极端情况下（keyState 异常）最长等待后强制解锁。
     private static let forceArmAfter: TimeInterval = 2.0
-    private static let keyCodeV: CGKeyCode = 0x09 // kVK_ANSI_V
+    private static let keyCodeV: CGKeyCode = 0x09
     private static let keyCodeReturn: CGKeyCode = 0x24
     private static let keyCodeKeypadEnter: CGKeyCode = 0x4C
 
     private init() {}
 
-    /// 面板即将显示时调用：先上锁，等呼出和弦松开后再开锁（仅开锁，不关面板）。
+    /// Panel about to show: lock until open chord fully released; keep monitor for paste.
     func beginArmingAfterPanelOpen() {
         tearDownMonitorAndPoll()
         isArmed = false
         armingStartedAt = Date()
-
-        if Self.isOpenHotkeyChordFullyReleased() {
-            isArmed = true
-            armingStartedAt = nil
-            return
-        }
+        PanelPasteHotKeys.shared.start()
+        PanelPasteHotKeys.shared.setArmed(false)
 
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyUp, .keyDown]) { [weak self] event in
             guard let self else { return event }
             return self.handleMonitorEvent(event)
         }
 
+        if Self.isOpenHotkeyChordFullyReleased() {
+            armKeepingMonitor()
+            return
+        }
         schedulePoll()
     }
 
-    /// 面板隐藏时复位（下次打开再重新闸门）。不由解锁路径调用。
+    /// Panel hidden: reset and remove monitor.
     func reset() {
         tearDownMonitorAndPoll()
         isArmed = true
         armingStartedAt = nil
+        PanelPasteHotKeys.shared.stop()
     }
 
     // MARK: - Private
 
     private func handleMonitorEvent(_ event: NSEvent) -> NSEvent? {
-        if !isArmed, Self.isPanelPasteShortcutKeyDown(event) {
-            // 吞掉竞态中的 ⌘V / 回车，避免落入 `.keyboardShortcut`。
-            tryArmFromCurrentKeyState()
+        if Self.isPanelPasteShortcutKeyDown(event) {
+            if !isArmed {
+                tryArmFromCurrentKeyState()
+                return nil
+            }
+            // Armed: handle paste here (do not rely on SwiftUI keyboardShortcut).
+            if event.keyCode == Self.keyCodeV {
+                NotificationCenter.default.post(name: .hisCopyPanelPastePlain, object: nil)
+            } else {
+                NotificationCenter.default.post(name: .hisCopyPanelPasteFormatted, object: nil)
+            }
             return nil
         }
 
@@ -86,20 +97,23 @@ final class PanelPasteShortcutGate: ObservableObject {
     private func tryArmFromCurrentKeyState() {
         guard !isArmed else { return }
         if Self.isOpenHotkeyChordFullyReleased() {
-            arm()
+            armKeepingMonitor()
             return
         }
         if let started = armingStartedAt, Date().timeIntervalSince(started) >= Self.forceArmAfter {
-            arm()
+            armKeepingMonitor()
         }
     }
 
-    /// 仅恢复粘贴快捷键；禁止在此隐藏窗口或发关闭通知。
-    private func arm() {
+    /// Unlock paste; **keep** the key monitor so ⌘V / Return work on a nonactivating panel.
+    private func armKeepingMonitor() {
         guard !isArmed else { return }
         isArmed = true
         armingStartedAt = nil
-        tearDownMonitorAndPoll()
+        pollWorkItem?.cancel()
+        pollWorkItem = nil
+        PanelPasteHotKeys.shared.setArmed(true)
+        // Keep `monitor` installed until `reset()`.
     }
 
     private func tearDownMonitorAndPoll() {
@@ -111,7 +125,6 @@ final class PanelPasteShortcutGate: ObservableObject {
         }
     }
 
-    /// 呼出热键相关物理键均已松开：无 ⌘/⇧/⌥/⌃，且 V 未按下。
     private static func isOpenHotkeyChordFullyReleased() -> Bool {
         let mods = NSEvent.modifierFlags.intersection([.command, .shift, .option, .control])
         if !mods.isEmpty { return false }

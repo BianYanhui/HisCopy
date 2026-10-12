@@ -11,6 +11,8 @@ struct HistoryPanelView: View {
     @State private var scrollNonce = 0
     @FocusState private var searchFocused: Bool
     @StateObject private var arrowKeyMonitor = PanelListArrowKeyMonitor()
+    /// Debounce Carbon hotkey + local monitor both firing.
+    @State private var lastPasteAt: Date?
 
     private var filtered: [ClipboardItem] {
         store.filtered(search: searchText)
@@ -61,6 +63,14 @@ struct HistoryPanelView: View {
         .onReceive(NotificationCenter.default.publisher(for: .hisCopyPanelMoveSelection)) { note in
             guard let delta = note.userInfo?["delta"] as? Int else { return }
             moveSelection(by: delta)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .hisCopyPanelPastePlain)) { _ in
+            guard pasteShortcutGate.isArmed else { return }
+            pastePlainSelected()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .hisCopyPanelPasteFormatted)) { _ in
+            guard pasteShortcutGate.isArmed else { return }
+            pasteFormattedSelected()
         }
         .onExitCommand {
             handleEscape()
@@ -157,14 +167,25 @@ struct HistoryPanelView: View {
     /// ⌘V：无格式纯文本 → 模拟粘贴 → 关闭面板。
     /// 快捷键路径受 `PanelPasteShortcutGate` 保护；鼠标点击按钮始终可用。
     private func pastePlainSelected() {
+        guard acceptPasteTrigger() else { return }
         guard let item = selectedItem() else { return }
         pastePlain(item)
     }
 
     /// 回车：有格式原文 → 模拟粘贴 → 关闭面板。
     private func pasteFormattedSelected() {
+        guard acceptPasteTrigger() else { return }
         guard let item = selectedItem() else { return }
         pasteFormatted(item)
+    }
+
+    private func acceptPasteTrigger() -> Bool {
+        let now = Date()
+        if let last = lastPasteAt, now.timeIntervalSince(last) < 0.35 {
+            return false
+        }
+        lastPasteAt = now
+        return true
     }
 
     private func pastePlain(_ item: ClipboardItem) {
@@ -414,11 +435,7 @@ struct HistoryPanelView: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .disabled(selection == nil)
-            .modifier(PanelPasteKeyboardShortcut(
-                isArmed: pasteShortcutGate.isArmed,
-                key: "v",
-                modifiers: .command
-            ))
+            // ⌘V is handled by PanelPasteShortcutGate local monitor (nonactivating panel).
             .help("写入无格式纯文本并向前置应用发送 ⌘V，然后关闭面板")
 
             Button {
@@ -434,7 +451,7 @@ struct HistoryPanelView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
             .disabled(selection == nil)
-            .modifier(PanelPasteDefaultActionShortcut(isArmed: pasteShortcutGate.isArmed))
+            // Return is handled by PanelPasteShortcutGate local monitor (nonactivating panel).
             .help("按原样写入剪贴板并向前置应用发送 ⌘V，然后关闭面板")
         }
         .padding(.horizontal, HisCopyStyle.stripHorizontalPadding)
@@ -543,34 +560,6 @@ private struct HistoryRow: View {
     }
 }
 
-/// 仅在闸门解锁后挂载面板内粘贴快捷键，避免与全局呼出热键抢事件。
-private struct PanelPasteKeyboardShortcut: ViewModifier {
-    let isArmed: Bool
-    let key: KeyEquivalent
-    let modifiers: EventModifiers
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if isArmed {
-            content.keyboardShortcut(key, modifiers: modifiers)
-        } else {
-            content
-        }
-    }
-}
-
-private struct PanelPasteDefaultActionShortcut: ViewModifier {
-    let isArmed: Bool
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if isArmed {
-            content.keyboardShortcut(.defaultAction)
-        } else {
-            content
-        }
-    }
-}
 
 /// Local key monitor so ↑/↓ (and numpad 8/2) move selection without clicking the list.
 /// Borderless `NSPanel` + unfocused search leaves no List first-responder; this fills the gap.
@@ -585,7 +574,7 @@ private final class PanelListArrowKeyMonitor: ObservableObject {
             guard let self else { return event }
             guard !self.searchFocused else { return event }
 
-            // Only while the history panel itself is key (not Settings or other windows).
+            // Panel may be key without HisCopy being the active app (.nonactivatingPanel).
             guard let key = NSApp.keyWindow,
                   key.isVisible,
                   key.title == "HisCopy" else {

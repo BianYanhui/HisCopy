@@ -233,18 +233,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showHistoryPanel() {
         if let window = historyWindow {
-            presentHistoryWindow(window)
-            return
+            // Recreate if this process still holds a pre-0.7.2 activating panel.
+            if !window.styleMask.contains(.nonactivatingPanel) {
+                window.orderOut(nil)
+                historyWindow = nil
+            } else {
+                presentHistoryWindow(window)
+                return
+            }
         }
 
         let rootView = HistoryPanelView()
         let hosting = NSHostingController(rootView: rootView)
 
-        // Borderless floating panel: no traffic lights / titlebar chrome (Pulse-like).
-        // Subclass overrides canBecomeKey so ⌘V / 回车 / 搜索仍可用。
+        // Borderless + nonactivating: panel can be key for search/shortcuts without
+        // activating HisCopy, so the destination dialog keeps focus (Spotlight-like).
         let window = HistoryPanel(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 540),
-            styleMask: [.borderless, .resizable],
+            styleMask: [.borderless, .resizable, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -257,32 +263,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.animationBehavior = .utilityWindow
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        // Show above modal dialogs / sheets of other apps.
+        window.worksWhenModal = true
         // 松手/短暂失活时不要自动消失；仅由热键再次按下、Esc、粘贴、点外部等关闭。
         window.hidesOnDeactivate = false
+        window.becomesKeyOnlyIfNeeded = false
         window.contentViewController = hosting
         historyWindow = window
         presentHistoryWindow(window)
     }
 
     private func presentHistoryWindow(_ window: NSWindow) {
-        // Capture destination app + focused field BEFORE we become key / activate.
+        // Ensure style even if an older window instance was created before v0.7.2.
+        if let panel = window as? NSPanel {
+            panel.styleMask.insert(.nonactivatingPanel)
+            panel.worksWhenModal = true
+            panel.becomesKeyOnlyIfNeeded = false
+        }
+
+        // Capture destination while it is still frontmost (we must NOT NSApp.activate).
         PasteFocusCoordinator.shared.captureFromFrontmostApplication()
-        // 必须在成为 key window 之前上锁，避免呼出和弦落入面板 ⌘V / 回车。
+        // Lock paste until open chord releases; monitor stays for ⌘V / Return.
         PanelPasteShortcutGate.shared.beginArmingAfterPanelOpen()
-        // ⇧⌘V 呼出：始终居中于当前屏幕。
+
         window.alphaValue = 1
         window.center()
+        // Key without activating HisCopy — destination app stays frontmost.
+        window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        // Borderless panel: without a first responder, List won't get arrow keys
-        // until the user clicks. Prefer the hosting content view so key events flow.
+        // Do NOT call NSApp.activate(ignoringOtherApps:). That was the v0.7.1 failure mode:
+        // dialogs/Electron fields lose first responder and often never get it back.
+
         if let content = window.contentView {
             _ = window.makeFirstResponder(content)
         }
         installPanelDismissMonitors()
-        // 每次打开（含 orderOut 后复用）通知面板：选中最新并滚到顶。
         NotificationCenter.default.post(name: .hisCopyHistoryPanelDidOpen, object: nil)
-        // Re-assert key + first responder after AppKit finishes ordering front.
         DispatchQueue.main.async {
             window.makeKeyAndOrderFront(nil)
             if let content = window.contentView {
@@ -332,13 +348,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 供粘贴流程调用：收起面板，并把焦点交回打开面板前的目标应用/输入框。
+    /// Hide panel for paste. With nonactivating panel, destination usually still
+    /// frontmost; only restore if we somehow became active.
     func prepareForPasteToFrontmostApp(hidePanel: Bool) {
         if hidePanel {
-            // Immediate orderOut — animated dismiss races with focus handoff.
             self.hideHistoryPanel(animated: false)
         }
-        _ = PasteFocusCoordinator.shared.restoreDestinationApp()
+        _ = PasteFocusCoordinator.shared.restoreDestinationAppIfNeeded()
     }
 
     @objc private func togglePauseCapture() {
@@ -382,7 +398,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 
-/// Borderless history panel that can still become key for search & paste shortcuts.
+/// Nonactivating floating panel: can be key for search/arrows/paste shortcuts
+/// without activating HisCopy, so the original dialog keeps system focus.
 private final class HistoryPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
