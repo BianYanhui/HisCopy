@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Combine
+import QuartzCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -205,10 +206,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showHistoryPanel()
     }
 
-    private func hideHistoryPanel() {
+    private func hideHistoryPanel(animated: Bool = true) {
         tearDownPanelDismissMonitors()
-        historyWindow?.orderOut(nil)
-        PanelPasteShortcutGate.shared.reset()
+        guard let window = historyWindow else {
+            PanelPasteShortcutGate.shared.reset()
+            return
+        }
+        let finish: () -> Void = {
+            window.orderOut(nil)
+            window.alphaValue = 1
+            PanelPasteShortcutGate.shared.reset()
+        }
+        // 粘贴路径必须立刻收起，避免焦点交还竞态；Esc/热键/点外部可短 fade。
+        guard animated, window.isVisible else {
+            finish()
+            return
+        }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.16
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            window.animator().alphaValue = 0
+        }, completionHandler: {
+            finish()
+        })
     }
 
     @objc private func showHistoryPanel() {
@@ -252,6 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 必须在成为 key window 之前上锁，避免呼出和弦落入面板 ⌘V / 回车。
         PanelPasteShortcutGate.shared.beginArmingAfterPanelOpen()
         // ⇧⌘V 呼出：始终居中于当前屏幕。
+        window.alphaValue = 1
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -305,7 +326,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 供粘贴流程调用：收起面板，并把焦点交回先前前置应用。
     func prepareForPasteToFrontmostApp(hidePanel: Bool) {
         if hidePanel {
-            self.hideHistoryPanel()
+            self.hideHistoryPanel(animated: false)
         }
         if let app = previousFrontmostApp, !app.isTerminated {
             app.activate(options: [.activateIgnoringOtherApps])

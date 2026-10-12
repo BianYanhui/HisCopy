@@ -1,16 +1,39 @@
 import SwiftUI
 import AppKit
 
-/// Shared visual tokens for a native macOS / HIG look (Notes / Spotlight / Maccy restraint).
+/// Shared visual tokens — Apple-native HIG, with spacing/motion feel inspired by
+/// Pulse (Apache-2.0) panel patterns: continuous corners, spring open/close,
+/// accent selection wells, keycap hints. Zero third-party; no Pulse source copied.
 enum HisCopyStyle {
-    static let panelMinWidth: CGFloat = 380
-    static let panelMinHeight: CGFloat = 460
-    static let thumbnailSize: CGFloat = 36
-    static let thumbnailCorner: CGFloat = 6
-    static let symbolWellSize: CGFloat = 36
-    static let symbolWellCorner: CGFloat = 8
-    static let rowVerticalPadding: CGFloat = 4
-    static let contentSpacing: CGFloat = 10
+    static let panelMinWidth: CGFloat = 390
+    static let panelMinHeight: CGFloat = 480
+    static let thumbnailSize: CGFloat = 38
+    static let thumbnailCorner: CGFloat = 7
+    static let symbolWellSize: CGFloat = 38
+    static let symbolWellCorner: CGFloat = 9
+    static let rowCorner: CGFloat = 9
+    static let rowVerticalPadding: CGFloat = 7
+    static let rowHorizontalInset: CGFloat = 10
+    static let contentSpacing: CGFloat = 12
+    static let stripHorizontalPadding: CGFloat = 14
+    static let stripVerticalPadding: CGFloat = 10
+    static let footerVerticalPadding: CGFloat = 10
+    static let keyCapCorner: CGFloat = 5
+
+    /// Panel appear / expand (Pulse-like spring, Apple-native).
+    static var panelAppear: Animation {
+        .spring(response: 0.32, dampingFraction: 0.86)
+    }
+
+    /// Selection / hover highlight motion.
+    static var selection: Animation {
+        .spring(response: 0.28, dampingFraction: 0.84)
+    }
+
+    /// Short hover wash.
+    static var hover: Animation {
+        .easeOut(duration: 0.12)
+    }
 
     static let relativeTime: RelativeDateTimeFormatter = {
         let f = RelativeDateTimeFormatter()
@@ -64,10 +87,10 @@ struct EmptyHistoryState: View {
     let systemImage: String
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
             Spacer(minLength: 0)
             Image(systemName: systemImage)
-                .font(.system(size: 40, weight: .light))
+                .font(.system(size: 42, weight: .light))
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(.secondary)
             Text(title)
@@ -82,5 +105,52 @@ struct EmptyHistoryState: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Compact keycap chip for footer shortcut hints (Pulse ShortcutField feel,
+/// Apple system fills only).
+struct ShortcutKeyCap: View {
+    let label: String
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 10, weight: .semibold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: HisCopyStyle.keyCapCorner, style: .continuous)
+                    .fill(.quaternary.opacity(0.55))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: HisCopyStyle.keyCapCorner, style: .continuous)
+                    .strokeBorder(.separator.opacity(0.4), lineWidth: 0.5)
+            )
+            .accessibilityHidden(true)
+    }
+}
+
+/// Rounded selection / hover wash behind a history row.
+struct HistoryRowHighlight: View {
+    let isSelected: Bool
+    let isHovered: Bool
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: HisCopyStyle.rowCorner, style: .continuous)
+            .fill(fill)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+    }
+
+    private var fill: Color {
+        if isSelected {
+            return Color.accentColor.opacity(0.16)
+        }
+        if isHovered {
+            return Color.primary.opacity(0.055)
+        }
+        return .clear
     }
 }
