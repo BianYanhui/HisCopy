@@ -7,13 +7,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var historyWindow: NSWindow?
     private var pauseMenuItem: NSMenuItem?
+    private var historyMenuItem: NSMenuItem?
+    private var hotKeyStatusMenuItem: NSMenuItem?
     private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         setupStatusItem()
         observePauseState()
+        observeHotKeyState()
         ClipboardMonitor.shared.start()
+
+        let hotKeys = GlobalHotKeyManager.shared
+        hotKeys.onHotKeyPressed = { [weak self] in
+            self?.toggleHistoryPanel()
+        }
+        hotKeys.start()
+        refreshHotKeyMenuPresentation()
+
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleWillQuitForUpdate),
@@ -24,10 +35,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        GlobalHotKeyManager.shared.stop()
         ClipboardMonitor.shared.stop()
     }
 
     @objc private func handleWillQuitForUpdate() {
+        GlobalHotKeyManager.shared.stop()
         ClipboardMonitor.shared.stop()
         historyWindow?.orderOut(nil)
     }
@@ -44,9 +57,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = true
 
-        let historyItem = NSMenuItem(title: "显示历史", action: #selector(showHistoryPanel), keyEquivalent: "h")
+        let historyItem = NSMenuItem(title: "显示/隐藏历史", action: #selector(toggleHistoryPanel), keyEquivalent: "")
         historyItem.target = self
         menu.addItem(historyItem)
+        historyMenuItem = historyItem
+
+        let hotKeyStatus = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        hotKeyStatus.isEnabled = false
+        menu.addItem(hotKeyStatus)
+        hotKeyStatusMenuItem = hotKeyStatus
 
         let pauseItem = NSMenuItem(
             title: pauseTitle(paused: ClipboardHistoryStore.shared.isPaused),
@@ -91,6 +110,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
     }
 
+    private func observeHotKeyState() {
+        let manager = GlobalHotKeyManager.shared
+        manager.$shortcut
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.refreshHotKeyMenuPresentation()
+            }
+            .store(in: &cancellables)
+        manager.$registrationFailureMessage
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.refreshHotKeyMenuPresentation()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func refreshHotKeyMenuPresentation() {
+        let manager = GlobalHotKeyManager.shared
+        let shortcut = manager.shortcut
+
+        if let historyMenuItem {
+            let equiv = shortcut.menuKeyEquivalent
+            if manager.registrationFailureMessage == nil, !equiv.isEmpty {
+                historyMenuItem.keyEquivalent = equiv
+                historyMenuItem.keyEquivalentModifierMask = shortcut.cocoaModifierFlags
+            } else {
+                historyMenuItem.keyEquivalent = ""
+                historyMenuItem.keyEquivalentModifierMask = []
+            }
+        }
+
+        if let hotKeyStatusMenuItem {
+            if let failure = manager.registrationFailureMessage {
+                hotKeyStatusMenuItem.title = "⚠️ \(failure)"
+                hotKeyStatusMenuItem.isHidden = false
+            } else {
+                hotKeyStatusMenuItem.title = "全局快捷键：\(shortcut.displayString)"
+                hotKeyStatusMenuItem.isHidden = false
+            }
+        }
+    }
+
     private func updatePauseUI(paused: Bool) {
         pauseMenuItem?.title = pauseTitle(paused: paused)
         if let button = statusItem?.button {
@@ -109,6 +170,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "HisCopy")
         image?.isTemplate = true
         return image
+    }
+
+    @objc private func toggleHistoryPanel() {
+        if let window = historyWindow, window.isVisible {
+            window.orderOut(nil)
+            return
+        }
+        showHistoryPanel()
     }
 
     @objc private func showHistoryPanel() {
