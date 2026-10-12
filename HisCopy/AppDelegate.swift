@@ -50,7 +50,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: .hisCopyPrepareForPaste,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applyPanelPresentation),
+            name: .hisCopyPanelPresentationChanged,
+            object: nil
+        )
+        let dock = DockedPanelController.shared
+        dock.installDismissMonitors = { [weak self] in self?.installPanelDismissMonitors() }
+        dock.tearDownDismissMonitors = { [weak self] in self?.tearDownPanelDismissMonitors() }
+        applyPanelPresentation()
         AppUpdater.shared.checkOnLaunchIfNeeded()
+    }
+
+    private var isDocking: Bool { PanelPresentation.shared.dockingEnabled }
+
+    /// 吸附 / 不吸附 switched, or the dock edge changed in Settings.
+    @objc private func applyPanelPresentation() {
+        let dock = DockedPanelController.shared
+        if isDocking {
+            if let window = historyWindow, window.isVisible {
+                tearDownPanelDismissMonitors()
+                window.orderOut(nil)
+                PanelPasteShortcutGate.shared.reset()
+            }
+            if dock.isInstalled {
+                dock.reloadPlacement()
+            } else {
+                dock.install()
+            }
+        } else if dock.isInstalled {
+            dock.uninstall()
+        }
+    }
+
+    /// The window click-outside dismissal is measured against.
+    private var activePanelWindow: NSWindow? {
+        isDocking ? DockedPanelController.shared.window : historyWindow
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -64,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ClipboardMonitor.shared.stop()
         tearDownPanelDismissMonitors()
         historyWindow?.orderOut(nil)
+        DockedPanelController.shared.uninstall()
     }
 
     @objc private func handleHideHistoryPanel() {
@@ -199,6 +236,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleHistoryPanel() {
+        if isDocking {
+            DockedPanelController.shared.toggleFromHotKey()
+            return
+        }
         if let window = historyWindow, window.isVisible {
             hideHistoryPanel()
             return
@@ -207,6 +248,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func hideHistoryPanel(animated: Bool = true) {
+        if isDocking {
+            DockedPanelController.shared.retract()
+            return
+        }
         tearDownPanelDismissMonitors()
         guard let window = historyWindow else {
             PanelPasteShortcutGate.shared.reset()
@@ -243,8 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        let rootView = HistoryPanelView()
-        let hosting = NSHostingController(rootView: rootView)
+        let hosting = NSHostingController(rootView: CenteredPanelRoot())
 
         // Borderless + nonactivating: panel can be key for search/shortcuts without
         // activating HisCopy, so the destination dialog keeps focus (Spotlight-like).
@@ -321,7 +365,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         clickOutsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-            guard let self, let window = self.historyWindow, window.isVisible else { return }
+            guard let self, let window = self.activePanelWindow, window.isVisible else { return }
             let screenPoint = NSEvent.mouseLocation
             if !window.frame.contains(screenPoint) {
                 // 状态栏按钮点击留给菜单，不在这里抢。
@@ -351,7 +395,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Hide panel for paste. With nonactivating panel, destination usually still
     /// frontmost; only restore if we somehow became active.
     func prepareForPasteToFrontmostApp(hidePanel: Bool) {
-        if hidePanel {
+        if hidePanel, isDocking {
+            DockedPanelController.shared.retractForPaste()
+        } else if hidePanel {
             self.hideHistoryPanel(animated: false)
         }
         _ = PasteFocusCoordinator.shared.restoreDestinationAppIfNeeded()
@@ -397,11 +443,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-
-/// Nonactivating floating panel: can be key for search/arrows/paste shortcuts
-/// without activating HisCopy, so the original dialog keeps system focus.
-private final class HistoryPanel: NSPanel {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
-}
 

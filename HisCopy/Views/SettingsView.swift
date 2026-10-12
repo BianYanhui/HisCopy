@@ -5,6 +5,7 @@ struct SettingsView: View {
     @ObservedObject private var updater = AppUpdater.shared
     @ObservedObject private var store = ClipboardHistoryStore.shared
     @ObservedObject private var pasteController = PasteController.shared
+    @ObservedObject private var presentation = PanelPresentation.shared
 
     /// Always in-range for the current unit — Stepper crashes if value ∉ `in:`.
     private var retentionAgeRange: ClosedRange<Int> {
@@ -109,6 +110,36 @@ struct SettingsView: View {
             }
 
             Section {
+                Picker("面板位置", selection: $presentation.dockingEnabled) {
+                    Text("不吸附").tag(false)
+                    Text("吸附").tag(true)
+                }
+                .pickerStyle(.segmented)
+
+                if presentation.dockingEnabled {
+                    Picker("吸附边缘", selection: $presentation.dockEdge) {
+                        ForEach(PanelEdge.selectable) { edge in
+                            Text(edge.label).tag(edge)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                Picker("外观", selection: $presentation.appearance) {
+                    ForEach(PanelAppearance.allCases) { appearance in
+                        Text(appearance.label).tag(appearance)
+                    }
+                }
+                .pickerStyle(.segmented)
+            } header: {
+                Label("面板", systemImage: "sidebar.right")
+            } footer: {
+                Text(presentation.dockingEnabled
+                     ? "吸附：面板收起为屏幕边缘的一条细条，鼠标移到细条处即滑出，移开自动收回（点过面板后保持展开，Esc / 点外部 / 粘贴后收回）。⇧⌘V 从边缘弹出。拖动标题「历史」可沿边缘移动或拖到另一侧 / 顶部 / 另一块屏幕，位置自动记住。"
+                     : "不吸附：⇧⌘V 在屏幕正中呼出面板（与以往一致）。")
+            }
+
+            Section {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("呼出/隐藏历史")
                         .font(.body)
@@ -117,7 +148,7 @@ struct SettingsView: View {
             } header: {
                 Label("全局快捷键", systemImage: "keyboard")
             } footer: {
-                Text("默认 ⇧⌘V（Shift+Command+V），面板显示在屏幕正中。使用系统 Carbon RegisterEventHotKey，改后立即生效。仅打开面板通常无需辅助功能权限；模拟 ⌘V 粘贴才需要。菜单栏图标使用常规菜单。")
+                Text("默认 ⇧⌘V（Shift+Command+V）：不吸附时面板显示在屏幕正中，吸附时从边缘弹出。使用系统 Carbon RegisterEventHotKey，改后立即生效。仅打开面板通常无需辅助功能权限；模拟 ⌘V 粘贴才需要。菜单栏图标使用常规菜单。")
             }
 
             Section {

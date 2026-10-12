@@ -1,7 +1,15 @@
 import SwiftUI
 import AppKit
 
+// Restyled in v0.8.0 with Pulse's panel language (see Styles.swift and
+// THIRD_PARTY_NOTICES.md); layout and behaviour are HisCopy's own.
 struct HistoryPanelView: View {
+    /// Docked (吸附) panels get their surface from the berth and a drag handle.
+    let docked: Bool
+
+    init(docked: Bool = false) {
+        self.docked = docked
+    }
     @ObservedObject private var store = ClipboardHistoryStore.shared
     @ObservedObject private var pasteShortcutGate = PanelPasteShortcutGate.shared
     @State private var searchText = ""
@@ -30,11 +38,13 @@ struct HistoryPanelView: View {
 
             footerBar
         }
-        .frame(minWidth: HisCopyStyle.panelMinWidth, minHeight: HisCopyStyle.panelMinHeight)
-        .background { PanelChromeBackground() }
-        .clipShape(RoundedRectangle(cornerRadius: HisCopyStyle.panelCornerRadius, style: .continuous))
-        .opacity(appeared ? 1 : 0)
-        .scaleEffect(appeared ? 1 : 0.97, anchor: .center)
+        .frame(
+            minWidth: docked ? nil : HisCopyStyle.panelMinWidth,
+            minHeight: docked ? nil : HisCopyStyle.panelMinHeight
+        )
+        // Centered: Pulse-spring appear. Docked: the berth spring does the motion.
+        .opacity(docked || appeared ? 1 : 0)
+        .scaleEffect(docked || appeared ? 1 : 0.97, anchor: .center)
         .background(searchFocusShortcut)
         .onAppear {
             playAppearAnimation()
@@ -59,6 +69,10 @@ struct HistoryPanelView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .hisCopyPanelEscapeRequested)) { _ in
             handleEscape()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .hisCopyPanelQuickPick)) { note in
+            guard pasteShortcutGate.isArmed, let index = note.userInfo?["index"] as? Int else { return }
+            quickPick(index)
         }
         .onReceive(NotificationCenter.default.publisher(for: .hisCopyPanelMoveSelection)) { note in
             guard let delta = note.userInfo?["delta"] as? Int else { return }
@@ -89,9 +103,11 @@ struct HistoryPanelView: View {
         }
     }
 
+    /// Pulse separates with a hairline of the track colour, not a system Divider.
     private var insetDivider: some View {
-        Divider()
-            .opacity(0.45)
+        Rectangle()
+            .fill(Color.primary.opacity(0.08))
+            .frame(height: 1)
             .padding(.horizontal, HisCopyStyle.stripHorizontalPadding)
     }
 
@@ -179,6 +195,15 @@ struct HistoryPanelView: View {
         pasteFormatted(item)
     }
 
+    /// 1–9: paste the Nth visible row as-is (same as selecting it and pressing ↩).
+    private func quickPick(_ index: Int) {
+        let items = filtered
+        guard index >= 0, index < items.count else { return }
+        guard acceptPasteTrigger() else { return }
+        selection = items[index].id
+        pasteFormatted(items[index])
+    }
+
     private func acceptPasteTrigger() -> Bool {
         let now = Date()
         if let last = lastPasteAt, now.timeIntervalSince(last) < 0.35 {
@@ -207,11 +232,16 @@ struct HistoryPanelView: View {
     // MARK: - Header (custom — no NavigationStack / titlebar chrome)
 
     private var headerBar: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 10) {
             HStack(spacing: 8) {
                 Text("历史")
-                    .font(.system(.headline, design: .rounded).weight(.semibold))
+                    .font(HisCopyStyle.font(HisCopyStyle.titleFontSize, .semibold))
                     .foregroundStyle(.primary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    // Grab here to move the panel (along / between screen edges when docked).
+                    .background(DockDragHandle(docked: docked))
+                    .help(docked ? "拖动以沿屏幕边缘移动或换边" : "拖动以移动面板")
 
                 statusPill
 
@@ -224,6 +254,7 @@ struct HistoryPanelView: View {
                     EmptyView()
                 }
                 .toggleStyle(.switch)
+                .tint(.pulseGood)
                 .controlSize(.mini)
                 .labelsHidden()
                 .help(store.isPaused ? "恢复剪贴板捕获" : "暂停剪贴板捕获")
@@ -248,21 +279,19 @@ struct HistoryPanelView: View {
     }
 
     private var statusPill: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 5) {
             Circle()
-                .fill(store.isPaused ? Color.secondary.opacity(0.55) : Color.accentColor)
-                .frame(width: 5, height: 5)
+                .fill(store.isPaused ? Color.pulseCaution : Color.pulseGood)
+                .frame(width: 6, height: 6)
             Text(store.isPaused ? "已暂停" : "捕获中")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(store.isPaused ? Color.secondary : Color.accentColor)
+                .font(HisCopyStyle.font(HisCopyStyle.footnoteFontSize, .medium))
+                .foregroundStyle(.primary.opacity(0.5))
         }
-        .padding(.horizontal, 7)
+        .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .background(
             Capsule(style: .continuous)
-                .fill(store.isPaused
-                      ? Color.primary.opacity(0.05)
-                      : Color.accentColor.opacity(0.12))
+                .fill(Color.primary.opacity(HisCopyStyle.trackOpacity))
         )
         .accessibilityHidden(true)
     }
@@ -270,11 +299,11 @@ struct HistoryPanelView: View {
     private var searchField: some View {
         HStack(spacing: 7) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(searchFocused ? Color.accentColor : Color.secondary)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.primary.opacity(searchFocused ? HisCopyStyle.textStrong : HisCopyStyle.textSecondary))
             TextField("搜索历史", text: $searchText)
                 .textFieldStyle(.plain)
-                .font(.callout)
+                .font(HisCopyStyle.font(HisCopyStyle.rowFontSize + 1))
                 .focused($searchFocused)
             if !searchText.isEmpty {
                 Button {
@@ -282,37 +311,19 @@ struct HistoryPanelView: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.primary.opacity(HisCopyStyle.textSecondary))
                 }
                 .buttonStyle(.borderless)
                 .accessibilityLabel("清除搜索")
             } else {
-                Text("⌘F")
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .fill(Color.primary.opacity(0.05))
-                    )
-                    .accessibilityHidden(true)
+                ShortcutKeyCap(label: "⌘F")
             }
         }
-        .padding(.horizontal, 9)
+        .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(
             RoundedRectangle(cornerRadius: HisCopyStyle.searchFieldCorner, style: .continuous)
-                .fill(Color.primary.opacity(searchFocused ? 0.07 : 0.045))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: HisCopyStyle.searchFieldCorner, style: .continuous)
-                .strokeBorder(
-                    searchFocused
-                        ? Color.accentColor.opacity(0.50)
-                        : Color.primary.opacity(0.08),
-                    lineWidth: searchFocused ? 1 : 0.5
-                )
+                .fill(Color.primary.opacity(searchFocused ? 0.16 : 0.08))
         )
         .animation(HisCopyStyle.hover, value: searchFocused)
         .help("⌘F 聚焦搜索")
@@ -334,8 +345,8 @@ struct HistoryPanelView: View {
         } else {
             ScrollViewReader { proxy in
                 List(selection: $selection) {
-                    ForEach(filtered) { item in
-                        HistoryRow(item: item, isSelected: selection == item.id)
+                    ForEach(Array(filtered.enumerated()), id: \.element.id) { index, item in
+                        HistoryRow(item: item, number: index < 9 ? index + 1 : nil, isSelected: selection == item.id)
                             .tag(item.id)
                             .id(item.id)
                             .contentShape(Rectangle())
@@ -406,52 +417,30 @@ struct HistoryPanelView: View {
     /// 底栏：左侧用量，右侧两枚动作按钮（键帽嵌在按钮内）。
     private var footerBar: some View {
         HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(store.formattedUsageSummary)
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
+                    .font(HisCopyStyle.font(HisCopyStyle.footnoteFontSize, .medium).monospacedDigit())
+                    .foregroundStyle(.primary.opacity(0.5))
                     .lineLimit(1)
-                Text("收藏免于自动清理")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.tertiary)
+                Text("收藏免于自动清理 · 1–9 快速粘贴")
+                    .font(HisCopyStyle.font(9.5))
+                    .foregroundStyle(.primary.opacity(HisCopyStyle.textTertiary))
                     .lineLimit(1)
             }
-            .help("收藏条目不计入自动清理；清空仍会删除全部。")
+            .help("收藏条目不计入自动清理；清空仍会删除全部。按 1–9 直接粘贴对应条目原文。")
             .accessibilityLabel("历史 \(store.items.count) 条，约 \(ClipboardHistoryStore.formatByteCount(store.approximateTotalBytes))")
 
             Spacer(minLength: 8)
 
-            Button {
+            // ⌘V / Return are handled by PanelPasteShortcutGate (nonactivating panel).
+            PanelActionButton(keyCap: "⌘V", title: "纯文本", disabled: selection == nil) {
                 pastePlainSelected()
-            } label: {
-                HStack(spacing: 5) {
-                    ShortcutKeyCap(label: "⌘V")
-                    Text("纯文本")
-                        .font(.caption.weight(.semibold))
-                }
-                .padding(.horizontal, 2)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(selection == nil)
-            // ⌘V is handled by PanelPasteShortcutGate local monitor (nonactivating panel).
             .help("写入无格式纯文本并向前置应用发送 ⌘V，然后关闭面板")
 
-            Button {
+            PanelActionButton(keyCap: "↩", title: "粘贴原文", prominent: true, disabled: selection == nil) {
                 pasteFormattedSelected()
-            } label: {
-                HStack(spacing: 5) {
-                    ShortcutKeyCap(label: "↩")
-                    Text("粘贴原文")
-                        .font(.caption.weight(.semibold))
-                }
-                .padding(.horizontal, 2)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            .disabled(selection == nil)
-            // Return is handled by PanelPasteShortcutGate local monitor (nonactivating panel).
             .help("按原样写入剪贴板并向前置应用发送 ⌘V，然后关闭面板")
         }
         .padding(.horizontal, HisCopyStyle.stripHorizontalPadding)
@@ -461,46 +450,49 @@ struct HistoryPanelView: View {
 
 private struct HistoryRow: View {
     let item: ClipboardItem
+    var number: Int?
     var isSelected: Bool = false
     @ObservedObject private var store = ClipboardHistoryStore.shared
     @State private var isHovered = false
 
     var body: some View {
         HStack(alignment: .center, spacing: HisCopyStyle.contentSpacing) {
+            if let number {
+                RowNumberBadge(number: number, isSelected: isSelected)
+            } else {
+                Color.clear.frame(width: 14, height: 1)
+            }
             leadingVisual
                 .scaleEffect(isSelected ? HisCopyStyle.selectionScale : 1)
                 .animation(HisCopyStyle.selection, value: isSelected)
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: HisCopyStyle.rowInternalSpacing) {
                 Text(item.textPreview)
-                    .font(.callout.weight(isSelected ? .semibold : .medium))
-                    .foregroundStyle(.primary)
+                    .font(HisCopyStyle.font(HisCopyStyle.rowFontSize + 0.5, isSelected ? .semibold : .regular))
+                    .foregroundStyle(.primary.opacity(isSelected ? 1 : HisCopyStyle.textStrong))
                     .lineLimit(2)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 HStack(spacing: 6) {
                     Text(item.kindLabel)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                        .padding(.horizontal, 5)
+                        .font(HisCopyStyle.font(10, .medium))
+                        .foregroundStyle(.primary.opacity(0.5))
+                        .padding(.horizontal, 6)
                         .padding(.vertical, 1)
                         .background(
                             Capsule(style: .continuous)
-                                .fill(isSelected
-                                      ? Color.accentColor.opacity(0.14)
-                                      : Color.primary.opacity(0.06))
+                                .fill(Color.primary.opacity(HisCopyStyle.trackOpacity))
                         )
 
                     Text(HisCopyStyle.relativeTimeString(item.date))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .monospacedDigit()
+                        .font(HisCopyStyle.font(HisCopyStyle.footnoteFontSize).monospacedDigit())
+                        .foregroundStyle(.primary.opacity(HisCopyStyle.textSecondary))
 
                     if item.isFavorite {
                         Image(systemName: "star.fill")
                             .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(Color.yellow.opacity(0.95))
+                            .foregroundStyle(Color.pulseCaution)
                             .accessibilityHidden(true)
                     }
                 }
@@ -509,7 +501,7 @@ private struct HistoryRow: View {
             favoriteButton
         }
         .padding(.vertical, HisCopyStyle.rowVerticalPadding)
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             HistoryRowHighlight(isSelected: isSelected, isHovered: isHovered && !isSelected)
@@ -532,15 +524,13 @@ private struct HistoryRow: View {
             }
         } label: {
             Image(systemName: item.isFavorite ? "star.fill" : "star")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(item.isFavorite ? Color.yellow : Color.secondary)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(item.isFavorite ? AnyShapeStyle(Color.pulseCaution) : AnyShapeStyle(.primary.opacity(0.55)))
                 .opacity(item.isFavorite || isHovered || isSelected ? 1 : 0)
                 .frame(width: 24, height: 24)
                 .background(
                     Circle()
-                        .fill(item.isFavorite
-                              ? Color.yellow.opacity(0.14)
-                              : (isHovered || isSelected ? Color.primary.opacity(0.05) : Color.clear))
+                        .fill(isHovered || isSelected ? Color.primary.opacity(HisCopyStyle.trackOpacity) : Color.clear)
                 )
                 .contentShape(Circle())
         }
@@ -592,6 +582,16 @@ private final class PanelListArrowKeyMonitor: ObservableObject {
             let chord = event.modifierFlags.intersection([.command, .option, .control, .shift])
             guard chord.isEmpty else { return event }
 
+            // 1–9 (main row or keypad): quick paste of the Nth row.
+            if let digit = Self.quickPickIndex(for: event.keyCode) {
+                NotificationCenter.default.post(
+                    name: .hisCopyPanelQuickPick,
+                    object: nil,
+                    userInfo: ["index": digit]
+                )
+                return nil
+            }
+
             let delta: Int
             switch event.keyCode {
             case 125: delta = 1   // ↓
@@ -617,6 +617,12 @@ private final class PanelListArrowKeyMonitor: ObservableObject {
         }
     }
 
+    /// kVK_ANSI_1…9 → 0…8. Keypad digits stay navigation-only (8/2 move selection).
+    private static func quickPickIndex(for keyCode: UInt16) -> Int? {
+        let map: [UInt16: Int] = [18: 0, 19: 1, 20: 2, 21: 3, 23: 4, 22: 5, 26: 6, 28: 7, 25: 8]
+        return map[keyCode]
+    }
+
     deinit {
         if let monitor {
             NSEvent.removeMonitor(monitor)
@@ -624,6 +630,11 @@ private final class PanelListArrowKeyMonitor: ObservableObject {
     }
 }
 
+extension Notification.Name {
+    /// 1–9 pressed on the panel (userInfo["index"] = 0…8).
+    static let hisCopyPanelQuickPick = Notification.Name("HisCopyPanelQuickPick")
+}
+
 #Preview {
-    HistoryPanelView()
+    CenteredPanelRoot()
 }

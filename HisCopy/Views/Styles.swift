@@ -1,57 +1,62 @@
+// Copyright (c) 2026 qunqin24. Licensed under the Apache License, Version 2.0.
+// Visual tokens copied from Pulse (https://github.com/qunqin24/Pulse):
+// Sources/Pulse/Panel/UsageDetailCard.swift (`DetailCardLayout` type scale,
+// padding, spacing, corner radius, `.primary` opacity hierarchy, rounded fonts),
+// UsageDockView.swift (selection scale / springs), UsageTint.swift (status colours).
+// Modified by HisCopy, 2026: tokens mapped onto HisCopy's history list (rows,
+// keycaps, search field, buttons); HisCopy-specific components added.
 import SwiftUI
 import AppKit
 
-/// Shared visual tokens — Apple-native HIG, with spacing/motion feel inspired by
-/// Pulse (Apache-2.0) panel patterns: continuous corners, spring open/close,
-/// accent selection wells, keycap hints. Zero third-party; no Pulse source copied.
+/// Shared visual tokens — Pulse's panel language applied to HisCopy.
 enum HisCopyStyle {
     static let panelMinWidth: CGFloat = 400
     static let panelMinHeight: CGFloat = 480
-    /// Continuous corner used by SwiftUI chrome and AppKit contentView mask.
-    static let panelCornerRadius: CGFloat = 14
-    static let thumbnailSize: CGFloat = 34
-    static let thumbnailCorner: CGFloat = 6
-    static let symbolWellSize: CGFloat = 34
-    static let symbolWellCorner: CGFloat = 8
-    static let rowCorner: CGFloat = 8
-    static let rowVerticalPadding: CGFloat = 6
+    /// Pulse `DetailCardLayout.cornerRadius` (ring outer edge, 20pt at standard size).
+    static let panelCornerRadius: CGFloat = 20
+    static let thumbnailSize: CGFloat = 30
+    static let thumbnailCorner: CGFloat = 7
+    static let symbolWellSize: CGFloat = 30
+    static let rowCorner: CGFloat = 10
+    static let rowVerticalPadding: CGFloat = 7
     static let rowHorizontalInset: CGFloat = 8
+    /// Pulse `rowInternalSpacing` 7 / `contentSpacing` 14.
     static let contentSpacing: CGFloat = 10
-    /// Header / footer / search share one horizontal rhythm.
-    static let stripHorizontalPadding: CGFloat = 14
+    static let rowInternalSpacing: CGFloat = 4
+    /// Pulse `DetailCardLayout.padding` 18.
+    static let stripHorizontalPadding: CGFloat = 18
     static let stripVerticalPadding: CGFloat = 10
-    static let footerVerticalPadding: CGFloat = 9
-    static let headerTopPadding: CGFloat = 12
-    static let headerBottomPadding: CGFloat = 8
-    static let searchFieldCorner: CGFloat = 8
+    static let footerVerticalPadding: CGFloat = 12
+    static let headerTopPadding: CGFloat = 14
+    static let headerBottomPadding: CGFloat = 10
+    static let searchFieldCorner: CGFloat = 10
     static let keyCapCorner: CGFloat = 5
-    /// Selected leading visual scale (Pulse rail selection feel ≈ 1.06).
+    /// Pulse rail selection scale.
     static let selectionScale: CGFloat = 1.06
-    /// Hairline on light surfaces (Pulse PanelLight.edge idea: readable edge, not sliced).
-    static let panelEdgeOpacity: Double = 0.12
-    /// Soft scrim under material so wallpaper colour does not bleed through (esp. pink/red).
-    static let panelScrimOpacityLight: Double = 0.78
-    static let panelScrimOpacityDark: Double = 0.58
 
-    /// Panel appear / expand (Pulse-like spring, Apple-native).
-    static var panelAppear: Animation {
-        .spring(response: 0.32, dampingFraction: 0.86)
+    // Pulse type scale (`DetailCardLayout`), all `.rounded`.
+    static let titleFontSize: CGFloat = 14
+    static let rowFontSize: CGFloat = 12
+    static let footnoteFontSize: CGFloat = 11
+
+    static func font(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        .system(size: size, weight: weight, design: .rounded)
     }
 
-    /// Selection / hover highlight motion.
-    static var selection: Animation {
-        .spring(response: 0.28, dampingFraction: 0.84)
-    }
+    // Pulse's `.primary` opacity hierarchy.
+    static let textStrong: Double = 0.9
+    static let textSecondary: Double = 0.45
+    static let textTertiary: Double = 0.4
+    /// Pulse progress track / chip fill.
+    static let trackOpacity: Double = 0.12
 
-    /// Short hover wash.
-    static var hover: Animation {
-        .easeOut(duration: 0.12)
-    }
-
-    /// Row insert / empty-state transition.
-    static var contentTransition: Animation {
-        .spring(response: 0.30, dampingFraction: 0.88)
-    }
+    /// Pulse berth open/close.
+    static var panelAppear: Animation { .spring(response: 0.32, dampingFraction: 0.86) }
+    /// Pulse selection.
+    static var selection: Animation { .spring(response: 0.28, dampingFraction: 0.84) }
+    /// Pulse hover wash.
+    static var hover: Animation { .easeOut(duration: 0.2) }
+    static var contentTransition: Animation { .spring(response: 0.5, dampingFraction: 0.85) }
 
     static let relativeTime: RelativeDateTimeFormatter = {
         let f = RelativeDateTimeFormatter()
@@ -65,32 +70,37 @@ enum HisCopyStyle {
     }
 }
 
-/// Panel chrome: regular material + scrim + continuous clip + hairline.
-/// Thicker than ultraThin so desktop wallpaper (pink/red etc.) does not bleed as a side band.
-struct PanelChromeBackground: View {
-    @Environment(\.colorScheme) private var colorScheme
+extension Color {
+    // Pulse `UsageTint` colours, each with a deeper twin for the light panel.
+    static let pulseGood = usage(dark: (0.00, 0.90, 0.55), light: (0.00, 0.58, 0.35))
+    static let pulseCaution = usage(dark: (1.00, 0.76, 0.15), light: (0.76, 0.49, 0.00))
+    static let pulseWarning = usage(dark: (1.00, 0.31, 0.26), light: (0.87, 0.22, 0.17))
 
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: HisCopyStyle.panelCornerRadius, style: .continuous)
-        ZStack {
-            shape.fill(scrim)
-            shape.fill(.regularMaterial)
-            shape
-                .strokeBorder(Color.primary.opacity(HisCopyStyle.panelEdgeOpacity), lineWidth: 1)
-                .allowsHitTesting(false)
-        }
-    }
-
-    private var scrim: Color {
-        if colorScheme == .dark {
-            return Color.black.opacity(HisCopyStyle.panelScrimOpacityDark)
-        }
-        // Slight cool-neutral grey (not pure white) so the panel reads as a surface.
-        return Color(white: 0.97).opacity(HisCopyStyle.panelScrimOpacityLight)
+    private static func usage(
+        dark: (Double, Double, Double),
+        light: (Double, Double, Double)
+    ) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let (red, green, blue) = appearance.bestMatch(from: [.aqua, .darkAqua]) == .aqua ? light : dark
+            return NSColor(srgbRed: red, green: green, blue: blue, alpha: 1)
+        })
     }
 }
 
-/// Soft SF Symbol well matching system list affordances.
+/// Centered (不吸附) panel root: Pulse surface in a continuous rounded rect.
+struct CenteredPanelRoot: View {
+    @ObservedObject private var presentation = PanelPresentation.shared
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: HisCopyStyle.panelCornerRadius, style: .continuous)
+        HistoryPanelView(docked: false)
+            .background { PanelSurface(shape: shape, usesGlass: presentation.appearance.usesGlass) }
+            .clipShape(shape)
+            .environment(\.colorScheme, presentation.appearance.colorScheme)
+    }
+}
+
+/// Leading glyph for a row: Pulse draws marks bare, in `.primary` 0.75.
 struct SymbolWell: View {
     let systemName: String
     var size: CGFloat = HisCopyStyle.symbolWellSize
@@ -98,24 +108,11 @@ struct SymbolWell: View {
 
     var body: some View {
         Image(systemName: systemName)
-            .font(.system(size: size * 0.40, weight: .semibold))
-            .symbolRenderingMode(.hierarchical)
-            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+            .font(.system(size: size * 0.46, weight: .medium))
+            .foregroundStyle(.primary.opacity(isSelected ? HisCopyStyle.textStrong : 0.75))
             .frame(width: size, height: size)
             .background(
-                RoundedRectangle(cornerRadius: HisCopyStyle.symbolWellCorner, style: .continuous)
-                    .fill(isSelected
-                          ? Color.accentColor.opacity(0.16)
-                          : Color.primary.opacity(0.06))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: HisCopyStyle.symbolWellCorner, style: .continuous)
-                    .strokeBorder(
-                        isSelected
-                            ? Color.accentColor.opacity(0.22)
-                            : Color.primary.opacity(0.05),
-                        lineWidth: 0.5
-                    )
+                Circle().fill(Color.primary.opacity(isSelected ? HisCopyStyle.trackOpacity : 0.06))
             )
     }
 }
@@ -133,12 +130,7 @@ struct ThumbnailImage: View {
             .clipShape(RoundedRectangle(cornerRadius: HisCopyStyle.thumbnailCorner, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: HisCopyStyle.thumbnailCorner, style: .continuous)
-                    .strokeBorder(
-                        isSelected
-                            ? Color.accentColor.opacity(0.45)
-                            : Color.primary.opacity(0.10),
-                        lineWidth: isSelected ? 1 : 0.5
-                    )
+                    .strokeBorder(Color.primary.opacity(isSelected ? 0.35 : HisCopyStyle.trackOpacity), lineWidth: 1)
             )
     }
 }
@@ -149,19 +141,18 @@ struct EmptyHistoryState: View {
     let systemImage: String
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 8) {
             Spacer(minLength: 0)
             Image(systemName: systemImage)
-                .font(.system(size: 36, weight: .ultraLight))
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(.tertiary)
+                .font(.system(size: 30, weight: .light))
+                .foregroundStyle(.primary.opacity(HisCopyStyle.textTertiary))
             Text(title)
-                .font(.callout.weight(.medium))
-                .foregroundStyle(.secondary)
+                .font(HisCopyStyle.font(HisCopyStyle.titleFontSize, .semibold))
+                .foregroundStyle(.primary)
             if let subtitle, !subtitle.isEmpty {
                 Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(HisCopyStyle.font(HisCopyStyle.footnoteFontSize))
+                    .foregroundStyle(.primary.opacity(HisCopyStyle.textTertiary))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
             }
@@ -172,26 +163,35 @@ struct EmptyHistoryState: View {
     }
 }
 
-/// Compact keycap chip for footer shortcut hints (Pulse ShortcutField feel,
-/// Apple system fills only).
+/// Keycap chip (Pulse chip: `.primary` 0.12 fill, footnote medium at 0.5).
 struct ShortcutKeyCap: View {
     let label: String
+    var inverted = false
 
     var body: some View {
         Text(label)
-            .font(.system(size: 10, weight: .semibold, design: .rounded))
-            .monospacedDigit()
-            .foregroundStyle(.secondary)
+            .font(HisCopyStyle.font(10, .semibold).monospacedDigit())
+            .foregroundStyle(inverted ? AnyShapeStyle(Color.black.opacity(0.6)) : AnyShapeStyle(.primary.opacity(0.5)))
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
             .background(
                 RoundedRectangle(cornerRadius: HisCopyStyle.keyCapCorner, style: .continuous)
-                    .fill(Color.primary.opacity(0.07))
+                    .fill(inverted ? Color.black.opacity(0.10) : Color.primary.opacity(HisCopyStyle.trackOpacity))
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: HisCopyStyle.keyCapCorner, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
-            )
+            .accessibilityHidden(true)
+    }
+}
+
+/// 1–9 quick-pick badge on the first nine rows.
+struct RowNumberBadge: View {
+    let number: Int
+    var isSelected = false
+
+    var body: some View {
+        Text("\(number)")
+            .font(HisCopyStyle.font(HisCopyStyle.footnoteFontSize, .medium).monospacedDigit())
+            .foregroundStyle(.primary.opacity(isSelected ? HisCopyStyle.textStrong : HisCopyStyle.textTertiary))
+            .frame(width: 14)
             .accessibilityHidden(true)
     }
 }
@@ -202,55 +202,71 @@ struct PanelIconButton: View {
     let helpText: String
     var disabled: Bool = false
     let action: () -> Void
+    @State private var hovered = false
 
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(disabled ? Color.secondary.opacity(0.45) : Color.secondary)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.primary.opacity(disabled ? 0.25 : (hovered ? HisCopyStyle.textStrong : 0.55)))
                 .frame(width: 26, height: 26)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color.primary.opacity(0.05))
-                )
-                .contentShape(Rectangle())
+                .background(Circle().fill(Color.primary.opacity(hovered && !disabled ? HisCopyStyle.trackOpacity : 0)))
+                .contentShape(Circle())
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
         .disabled(disabled)
         .help(helpText)
+        .onHover { h in withAnimation(HisCopyStyle.hover) { hovered = h } }
     }
 }
 
-/// Rounded selection / hover wash behind a history row.
+/// Pulse-style capsule action: neutral chip, or the prominent white-on-black pill.
+struct PanelActionButton: View {
+    let keyCap: String
+    let title: String
+    var prominent = false
+    var disabled = false
+    let action: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                ShortcutKeyCap(label: keyCap, inverted: prominent && colorScheme == .dark)
+                Text(title)
+                    .font(HisCopyStyle.font(HisCopyStyle.rowFontSize, .semibold))
+            }
+            .foregroundStyle(foreground)
+            .padding(.leading, 5)
+            .padding(.trailing, 10)
+            .padding(.vertical, 5)
+            .background(Capsule(style: .continuous).fill(fill))
+            .contentShape(Capsule(style: .continuous))
+            .opacity(disabled ? 0.4 : 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .onHover { h in withAnimation(HisCopyStyle.hover) { hovered = h } }
+    }
+
+    private var fill: Color {
+        if prominent { return Color.primary.opacity(hovered ? 1 : 0.9) }
+        return Color.primary.opacity(hovered ? 0.18 : HisCopyStyle.trackOpacity)
+    }
+
+    private var foreground: Color {
+        prominent ? (colorScheme == .dark ? .black : .white) : Color.primary.opacity(HisCopyStyle.textStrong)
+    }
+}
+
+/// Selection / hover wash behind a history row (Pulse track fill).
 struct HistoryRowHighlight: View {
     let isSelected: Bool
     let isHovered: Bool
 
     var body: some View {
         RoundedRectangle(cornerRadius: HisCopyStyle.rowCorner, style: .continuous)
-            .fill(fill)
-            .overlay(
-                RoundedRectangle(cornerRadius: HisCopyStyle.rowCorner, style: .continuous)
-                    .strokeBorder(stroke, lineWidth: 0.5)
-            )
-            .padding(.horizontal, 2)
-            .padding(.vertical, 0)
-    }
-
-    private var fill: Color {
-        if isSelected {
-            return Color.accentColor.opacity(0.16)
-        }
-        if isHovered {
-            return Color.primary.opacity(0.05)
-        }
-        return .clear
-    }
-
-    private var stroke: Color {
-        if isSelected {
-            return Color.accentColor.opacity(0.22)
-        }
-        return .clear
+            .fill(Color.primary.opacity(isSelected ? HisCopyStyle.trackOpacity : (isHovered ? 0.06 : 0)))
     }
 }
