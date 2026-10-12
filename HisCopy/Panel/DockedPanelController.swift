@@ -8,6 +8,7 @@
 // Modified by HisCopy, 2026: rewritten around HisCopy's nonactivating history
 // panel, paste hotkey gate and focus coordinator; hover peek vs. hotkey open;
 // the sliver hot zone is tested from the sampler rather than a tracking area.
+// v0.8.1: separate draggable sliver window; flicker-free key handoff on paste.
 import AppKit
 import SwiftUI
 
@@ -21,9 +22,12 @@ final class DockedPanelModel: ObservableObject {
 
 /// Owns the 吸附 (docked) presentation of the history panel.
 ///
-/// One window sits flush against the chosen edge at full berth size. Collapsed,
-/// only Pulse's 6 × 96 sliver is drawn and the window ignores the mouse, so the
-/// transparent rest never eats a click; the pointer sampler reveals it.
+/// Two windows (v0.8.1): a small always-visible sliver window on the edge
+/// (Pulse's 6 × 96 sliver inside a 20pt hit zone — it can be dragged, and it
+/// stays put while the panel comes and goes), and the berth window, ordered in
+/// only while the panel is out. Ordering the berth out hands keyboard focus
+/// back to the destination app with nothing on screen changing, because the
+/// sliver window under it is already drawing the same sliver.
 @MainActor
 final class DockedPanelController {
     static let shared = DockedPanelController()
@@ -32,12 +36,16 @@ final class DockedPanelController {
 
     let model = DockedPanelModel()
     private(set) var window: HistoryPanel?
+    private var sliver: NSPanel?
     private(set) var state: State = .collapsed
     private var placement = DockPlacement.load()
     private var timer: Timer?
     private var outsideSince: Date?
+    private var hoverSince: Date?
     private var keyObserver: NSObjectProtocol?
     private var screensObserver: NSObjectProtocol?
+    /// Bumped on every open/close so a stale "order out after the spring" is ignored.
+    private var transitionToken = 0
 
     // Drag (Pulse FloatingPanel.sendEvent: begin / carry / finish).
     private var isDragging = false
@@ -49,9 +57,14 @@ final class DockedPanelController {
 
     /// Pulse PanelPointerWatcher interval is 0.15s for leaving; the sliver is
     /// tested on the same tick, a little faster so the reveal feels immediate.
-    private static let sampleInterval: TimeInterval = 0.08
+    private static let sampleInterval: TimeInterval = 0.05
+    /// Hover must rest this long on the sliver before it reveals, so a press
+    /// that starts a sliver drag wins over hover.
+    private static let hoverDwell: TimeInterval = 0.15
     /// Grace before a hover peek slides back once the pointer has left.
     private static let leaveGrace: TimeInterval = 0.25
+    /// Berth spring settles in about this long; the window is ordered out after.
+    private static let closeSettle: TimeInterval = 0.34
 
     var isInstalled: Bool { window != nil }
     var isOpenOrPeeking: Bool { state != .collapsed }
@@ -69,21 +82,19 @@ final class DockedPanelController {
             backing: .buffered,
             defer: false
         )
-        panel.title = "HisCopy"
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        // Pulse draws no window shadow on the docked rail; the berth fuses with the edge.
-        panel.hasShadow = false
-        panel.isReleasedWhenClosed = false
-        panel.animationBehavior = .none
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        panel.worksWhenModal = true
-        panel.hidesOnDeactivate = false
-        panel.becomesKeyOnlyIfNeeded = false
-        panel.isMovable = false
-        panel.ignoresMouseEvents = true
+        configure(panel)
         panel.contentViewController = NSHostingController(rootView: DockedPanelRootView(model: model))
         window = panel
+
+        let sliverPanel = SliverPanel(
+            contentRect: NSRect(x: 0, y: 0, width: DockLayout.collapsedHitWidth, height: DockLayout.collapsedHeight),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        configure(sliverPanel)
+        sliverPanel.contentViewController = NSHostingController(rootView: DockSliverView(model: model))
+        sliver = sliverPanel
 
         keyObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification, object: panel, queue: .main
@@ -99,8 +110,23 @@ final class DockedPanelController {
         state = .collapsed
         model.isOpen = false
         relayout()
-        panel.orderFrontRegardless()
+        sliverPanel.orderFrontRegardless()
         startSampling()
+    }
+
+    private func configure(_ panel: NSPanel) {
+        panel.title = "HisCopy"
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        // Pulse draws no window shadow on the docked rail; the berth fuses with the edge.
+        panel.hasShadow = false
+        panel.isReleasedWhenClosed = false
+        panel.animationBehavior = .none
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.worksWhenModal = true
+        panel.hidesOnDeactivate = false
+        panel.becomesKeyOnlyIfNeeded = false
+        panel.isMovable = false
     }
 
     func uninstall() {
@@ -112,7 +138,9 @@ final class DockedPanelController {
         if state == .open { tearDownDismissMonitors?() }
         PanelPasteShortcutGate.shared.reset()
         window?.orderOut(nil)
+        sliver?.orderOut(nil)
         window = nil
+        sliver = nil
         state = .collapsed
     }
 
@@ -123,17 +151,22 @@ final class DockedPanelController {
     }
 
     private func relayout() {
-        guard let window else { return }
         // Multi-monitor: the stored display, or the pointer's / main screen if it is gone.
-        guard let screen = placement.resolvedScreen() else { return }
         // A missing display is not overwritten: the old UUID is kept so the
         // panel returns there when it is plugged back in; a drag re-records it.
-        let frame = placement.frame(on: screen)
-        model.edge = placement.edge
+        guard let screen = placement.resolvedScreen() else { return }
+        apply(frame: placement.frame(on: screen))
+    }
+
+    private func apply(frame: CGRect) {
+        if model.edge != placement.edge { model.edge = placement.edge }
         model.berthSize = frame.size
-        window.setFrame(frame, display: true)
+        window?.setFrame(frame, display: true)
+        sliver?.setFrame(placement.hotZone(for: frame), display: true)
         // Pulse: `.statusBar` for horizontal docks, `.floating` otherwise.
-        window.level = placement.edge.isHorizontal ? .statusBar : .floating
+        let level: NSWindow.Level = placement.edge.isHorizontal ? .statusBar : .floating
+        window?.level = level
+        sliver?.level = level
     }
 
     // MARK: - Hotkey / dismiss
@@ -147,6 +180,26 @@ final class DockedPanelController {
         }
     }
 
+    /// Order the berth window in (collapsed) and spring it open on the next tick,
+    /// so SwiftUI has a collapsed frame to morph from.
+    private func showBerth() {
+        guard let window else { return }
+        transitionToken += 1
+        if !window.isVisible {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { model.isOpen = false }
+            window.alphaValue = 1
+            window.orderFrontRegardless()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.state != .collapsed else { return }
+                withAnimation(Self.berthSpring) { self.model.isOpen = true }
+            }
+        } else {
+            withAnimation(Self.berthSpring) { model.isOpen = true }
+        }
+    }
+
     private func open(fromHotKey: Bool) {
         guard let window else { return }
         if state == .collapsed {
@@ -156,9 +209,7 @@ final class DockedPanelController {
         let wasCollapsed = state == .collapsed
         state = .open
         outsideSince = nil
-        window.ignoresMouseEvents = false
-        withAnimation(Self.berthSpring) { model.isOpen = true }
-        window.orderFrontRegardless()
+        showBerth()
         if fromHotKey {
             window.makeKeyAndOrderFront(nil)
             if let content = window.contentView { _ = window.makeFirstResponder(content) }
@@ -175,13 +226,18 @@ final class DockedPanelController {
 
     /// Hover: slide out without taking key, so typing still goes to the destination.
     private func peek() {
-        guard let window, state == .collapsed else { return }
+        guard state == .collapsed else { return }
         PasteFocusCoordinator.shared.captureFromFrontmostApplication()
         state = .peeking
         outsideSince = nil
-        window.ignoresMouseEvents = false
-        withAnimation(Self.berthSpring) { model.isOpen = true }
+        showBerth()
         NotificationCenter.default.post(name: .hisCopyHistoryPanelDidOpen, object: nil)
+    }
+
+    /// Click on the sliver (no drag): open it as if by ⇧⌘V.
+    func sliverClicked() {
+        guard state != .open else { return }
+        open(fromHotKey: true)
     }
 
     /// A click inside a peeking panel makes it key: from then on it is "in use"
@@ -192,42 +248,41 @@ final class DockedPanelController {
     }
 
     /// Slide back to the sliver (Esc, click outside, ⇧⌘V again, pointer left a peek).
+    /// The berth window is ordered out once the spring has settled; the sliver
+    /// window underneath is identical, so nothing visibly disappears.
     func retract() {
-        guard let window, state != .collapsed else { return }
+        guard state != .collapsed else { return }
         if state == .open { tearDownDismissMonitors?() }
         PanelPasteShortcutGate.shared.reset()
         state = .collapsed
         outsideSince = nil
-        dropKey(window)
-        window.ignoresMouseEvents = true
+        hoverSince = nil
+        transitionToken += 1
+        let token = transitionToken
         withAnimation(Self.berthSpring) { model.isOpen = false }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.closeSettle) { [weak self] in
+            guard let self, self.transitionToken == token, self.state == .collapsed else { return }
+            self.window?.orderOut(nil)
+        }
     }
 
-    /// Paste path: give key back *now* (the synthetic ⌘V must reach the
-    /// destination), collapse without animation, then show the sliver again.
+    /// Paste path: the synthetic ⌘V must reach the destination, so key goes
+    /// back *now*. The berth window is made transparent and ordered out in one
+    /// step (no hide/re-show), and the sliver window — never hidden — is what
+    /// remains, so there is no flash.
     func retractForPaste() {
-        guard let window else { return }
         if state == .open { tearDownDismissMonitors?() }
         PanelPasteShortcutGate.shared.reset()
         state = .collapsed
         outsideSince = nil
-        window.ignoresMouseEvents = true
+        hoverSince = nil
+        transitionToken += 1
+        guard let window else { return }
+        window.alphaValue = 0
         window.orderOut(nil)
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) { model.isOpen = false }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            guard let self, let window = self.window, self.state == .collapsed else { return }
-            window.orderFrontRegardless()
-        }
-    }
-
-    /// A key nonactivating panel keeps the keyboard even while another app is
-    /// active; ordering it out and back hands key to the destination window.
-    private func dropKey(_ window: NSWindow) {
-        guard window.isKeyWindow else { return }
-        window.orderOut(nil)
-        window.orderFrontRegardless()
     }
 
     // MARK: - Pointer sampling (Pulse PanelPointerWatcher)
@@ -252,9 +307,20 @@ final class DockedPanelController {
         let p = NSEvent.mouseLocation
         switch state {
         case .collapsed:
-            // No reveal mid-click/drag of something else (e.g. a window being dragged past).
-            guard NSEvent.pressedMouseButtons == 0 else { return }
-            if placement.hotZone(for: window.frame).contains(p) { peek() }
+            // A press means a drag (of the sliver or of something else) — never reveal.
+            guard NSEvent.pressedMouseButtons == 0,
+                  let zone = sliver?.frame, zone.contains(p) else {
+                hoverSince = nil
+                return
+            }
+            if let since = hoverSince {
+                if Date().timeIntervalSince(since) >= Self.hoverDwell {
+                    hoverSince = nil
+                    peek()
+                }
+            } else {
+                hoverSince = Date()
+            }
         case .peeking:
             if window.isKeyWindow { open(fromHotKey: false); return }
             let inside = placement.body(for: window.frame).insetBy(dx: -8, dy: -8).contains(p)
@@ -275,16 +341,17 @@ final class DockedPanelController {
     func beginDrag() {
         guard let window else { return }
         isDragging = true
+        hoverSince = nil
         let p = NSEvent.mouseLocation
         grabOffset = CGPoint(x: p.x - window.frame.minX, y: p.y - window.frame.minY)
     }
 
     func carryDrag() {
-        guard isDragging, let window else { return }
+        guard isDragging else { return }
         let p = NSEvent.mouseLocation
         // Screen under the pointer, so a drag can carry the dock to another display.
         guard let screen = PanelScreen.containing(p) ?? placement.resolvedScreen() else { return }
-        let visible = screen.visibleFrame
+        let visible = DockPlacement.dockableFrame(of: screen)
         let edge = DockPlacement.edge(forPointer: p, in: visible)
         let size = DockPlacement.berthSize(for: edge, in: visible)
         let origin: CGPoint
@@ -298,11 +365,7 @@ final class DockedPanelController {
         placement.edge = edge
         placement.ratio = DockPlacement.ratio(forOrigin: origin, edge: edge, size: size, in: visible)
         placement.displayID = PanelScreen.identifier(of: screen)
-        let frame = placement.frame(on: screen)
-        if model.edge != edge { model.edge = edge }
-        model.berthSize = frame.size
-        window.setFrame(frame, display: true)
-        window.level = edge.isHorizontal ? .statusBar : .floating
+        apply(frame: placement.frame(on: screen))
     }
 
     func finishDrag() {
@@ -315,6 +378,92 @@ final class DockedPanelController {
     // MARK: - Motion (Pulse UsageDockView)
 
     static let berthSpring = Animation.spring(response: 0.32, dampingFraction: 0.86)
+}
+
+/// The sliver's own window: never key, so clicking or dragging it never takes
+/// keyboard focus from the destination app.
+final class SliverPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
+/// Pulse's collapsed sliver (the berth at openness 0) in its 20pt hit zone.
+struct DockSliverView: View {
+    @ObservedObject var model: DockedPanelModel
+    @ObservedObject private var presentation = PanelPresentation.shared
+
+    var body: some View {
+        let edge = model.edge
+        ZStack(alignment: alignment(for: edge)) {
+            // Pulse `PanelGlass.claim`: a fill no one can see gives the window the press.
+            PanelGlass.claim
+            PanelSurface(
+                shape: DockBerthShape(edge: edge, openness: 0),
+                usesGlass: presentation.appearance.usesGlass,
+                screenEdge: edge.screenSide
+            )
+            .frame(
+                width: edge.isHorizontal ? DockLayout.collapsedHeight : DockLayout.collapsedWidth,
+                height: edge.isHorizontal ? DockLayout.collapsedWidth : DockLayout.collapsedHeight
+            )
+        }
+        .overlay(SliverDragHandle())
+        .environment(\.colorScheme, presentation.appearance.colorScheme)
+        .help("悬停展开 · 点击打开 · 拖动以移动")
+    }
+
+    private func alignment(for edge: PanelEdge) -> Alignment {
+        switch edge {
+        case .left: .leading
+        case .right: .trailing
+        case .top: .top
+        case .bottom: .bottom
+        }
+    }
+}
+
+/// Press-and-move on the sliver drags the dock; a press without movement is a click.
+struct SliverDragHandle: NSViewRepresentable {
+    func makeNSView(context: Context) -> HandleView { HandleView() }
+    func updateNSView(_ view: HandleView, context: Context) {}
+
+    final class HandleView: NSView {
+        private var downAt: CGPoint?
+        private var dragging = false
+        /// Movement before a press becomes a drag.
+        private static let threshold: CGFloat = 3
+
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        override var mouseDownCanMoveWindow: Bool { false }
+        override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
+
+        override func mouseDown(with event: NSEvent) {
+            downAt = NSEvent.mouseLocation
+            dragging = false
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            guard let downAt else { return }
+            let p = NSEvent.mouseLocation
+            if !dragging, hypot(p.x - downAt.x, p.y - downAt.y) >= Self.threshold {
+                dragging = true
+                NSCursor.closedHand.push()
+                DockedPanelController.shared.beginDrag()
+            }
+            if dragging { DockedPanelController.shared.carryDrag() }
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            if dragging {
+                NSCursor.pop()
+                DockedPanelController.shared.finishDrag()
+            } else {
+                DockedPanelController.shared.sliverClicked()
+            }
+            downAt = nil
+            dragging = false
+        }
+    }
 }
 
 /// Nonactivating floating panel: can be key for search/arrows/paste shortcuts

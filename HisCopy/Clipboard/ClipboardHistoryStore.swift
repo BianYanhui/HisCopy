@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Combine
+import CryptoKit
 
 /// In-memory + Application Support JSON history with size/age retention.
 @MainActor
@@ -143,18 +144,69 @@ final class ClipboardHistoryStore: ObservableObject {
     }
 
     func add(_ item: ClipboardItem) {
-        // Deduplicate consecutive identical plain text / preview.
-        if let first = items.first {
-            if first.kind == item.kind,
-               first.plainText == item.plainText,
-               first.textPreview == item.textPreview,
-               first.fileURLs == item.fileURLs {
+        // v0.8.1: dedupe anywhere in history, not just against the newest item.
+        // An identical earlier copy moves to the top with a fresh date and keeps
+        // its id and favorite flag; the new capture's media file is dropped.
+        if let idx = items.firstIndex(where: { isSameContent($0, item) }) {
+            let existing = items[idx]
+            if idx == 0 && Date().timeIntervalSince(existing.date) < 1 {
+                // Same copy reported twice in quick succession.
+                if item.imageFileName != existing.imageFileName { removeMedia(for: item) }
                 return
             }
+            if item.imageFileName != existing.imageFileName {
+                removeMedia(for: item)
+            }
+            let moved = ClipboardItem(
+                id: existing.id,
+                kind: existing.kind,
+                textPreview: existing.textPreview,
+                plainText: existing.plainText,
+                html: existing.html,
+                rtfData: existing.rtfData,
+                imageFileName: existing.imageFileName,
+                fileURLs: existing.fileURLs,
+                date: Date(),
+                isFavorite: existing.isFavorite
+            )
+            items.remove(at: idx)
+            items.insert(moved, at: 0)
+            save()
+            return
         }
         items.insert(item, at: 0)
         trimIfNeeded()
         save()
+    }
+
+    /// Same content: same kind and the payload that kind is defined by.
+    private func isSameContent(_ a: ClipboardItem, _ b: ClipboardItem) -> Bool {
+        guard a.kind == b.kind else { return false }
+        switch a.kind {
+        case .text:
+            return a.plainText == b.plainText
+        case .html:
+            return a.html == b.html && a.plainText == b.plainText
+        case .rtf:
+            return a.rtfData == b.rtfData && a.plainText == b.plainText
+        case .files:
+            return a.fileURLs == b.fileURLs
+        case .image:
+            guard let ha = imageHash(a.imageFileName), let hb = imageHash(b.imageFileName) else { return false }
+            return ha == hb
+        }
+    }
+
+    /// SHA-256 of an image file, cached by file name (files are immutable once written).
+    private var imageHashCache: [String: String] = [:]
+
+    private func imageHash(_ name: String?) -> String? {
+        guard let name else { return nil }
+        if let cached = imageHashCache[name] { return cached }
+        guard let data = try? Data(contentsOf: mediaDir.appendingPathComponent(name)) else { return nil }
+        let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        imageHashCache[name] = hash
+        return hash
     }
 
     func remove(id: UUID) {
