@@ -4,6 +4,7 @@ struct SettingsView: View {
     @AppStorage("launchAtLogin") private var launchAtLogin = false
     @ObservedObject private var updater = AppUpdater.shared
     @ObservedObject private var store = ClipboardHistoryStore.shared
+    @ObservedObject private var pasteController = PasteController.shared
 
     var body: some View {
         Form {
@@ -21,7 +22,25 @@ struct SettingsView: View {
             } header: {
                 Text("剪贴板")
             } footer: {
-                Text("选中历史条目会复制回系统剪贴板；本版本不模拟按键粘贴（无需辅助功能权限）。")
+                Text("点选历史条目会写入系统剪贴板，并尝试向前置应用发送 ⌘V（需辅助功能权限）。")
+            }
+
+            Section {
+                Toggle("粘贴后自动隐藏面板", isOn: $pasteController.autoHideAfterPaste)
+                LabeledContent("辅助功能") {
+                    Text(pasteController.isAccessibilityTrusted ? "已授权" : "未授权")
+                        .foregroundStyle(pasteController.isAccessibilityTrusted ? .secondary : .orange)
+                }
+                Button("打开「隐私与安全性 → 辅助功能」…") {
+                    pasteController.openAccessibilitySettings()
+                }
+                Button("重新检查权限") {
+                    pasteController.refreshAccessibilityStatus()
+                }
+            } header: {
+                Text("粘贴")
+            } footer: {
+                Text("一键粘贴使用 Accessibility / CGEvent 模拟 ⌘V。未授权时仅写入剪贴板，并提示前往系统设置授权。可在「系统设置 → 隐私与安全性 → 辅助功能」中勾选 HisCopy。")
             }
 
             Section {
@@ -33,7 +52,7 @@ struct SettingsView: View {
             } header: {
                 Text("全局快捷键")
             } footer: {
-                Text("默认 ⇧⌘V（Shift+Command+V）。使用系统 Carbon RegisterEventHotKey，改后立即生效并写入偏好设置。仅打开面板，通常无需辅助功能（Accessibility）权限；模拟 ⌘V 粘贴才需要，本应用不模拟粘贴。")
+                Text("默认 ⇧⌘V（Shift+Command+V）。使用系统 Carbon RegisterEventHotKey，改后立即生效。仅打开面板通常无需辅助功能权限；模拟 ⌘V 粘贴才需要。菜单栏：左键打开历史，右键（或 Option+点击）打开菜单。")
             }
 
             Section {
@@ -63,7 +82,10 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 480, height: 460)
+        .frame(width: 500, height: 560)
+        .onAppear {
+            pasteController.refreshAccessibilityStatus()
+        }
     }
 }
 

@@ -49,12 +49,12 @@ struct HistoryPanelView: View {
                 appeared = true
             }
         }
-        .onChange(of: selection) { newValue in
-            // Single-click copies for quick menu-bar use.
-            if let id = newValue, let item = store.items.first(where: { $0.id == id }) {
-                store.copyToPasteboard(item)
-            }
-        }
+    }
+
+    /// 写入剪贴板并尝试向前置 App 发送 ⌘V（无权限则降级为仅复制）。
+    private func pasteItem(_ item: ClipboardItem) {
+        store.copyToPasteboard(item)
+        PasteController.shared.pasteToFrontmostApp()
     }
 
     private var toolbarStrip: some View {
@@ -95,14 +95,20 @@ struct HistoryPanelView: View {
                     HistoryRow(item: item)
                         .tag(item.id)
                         .contentShape(Rectangle())
-                        .onTapGesture(count: 2) {
-                            store.copyToPasteboard(item)
+                        .onTapGesture {
+                            selection = item.id
+                            pasteItem(item)
                         }
                         .contextMenu {
                             Button {
+                                pasteItem(item)
+                            } label: {
+                                Label("粘贴", systemImage: "doc.on.clipboard")
+                            }
+                            Button {
                                 store.copyToPasteboard(item)
                             } label: {
-                                Label("复制到剪贴板", systemImage: "doc.on.doc")
+                                Label("仅复制到剪贴板", systemImage: "doc.on.doc")
                             }
                             Divider()
                             Button(role: .destructive) {
@@ -135,14 +141,15 @@ struct HistoryPanelView: View {
 
             Button {
                 if let id = selection, let item = store.items.first(where: { $0.id == id }) {
-                    store.copyToPasteboard(item)
+                    pasteItem(item)
                 }
             } label: {
-                Label("复制所选", systemImage: "doc.on.clipboard")
+                Label("粘贴所选", systemImage: "doc.on.clipboard")
             }
             .controlSize(.small)
             .disabled(selection == nil)
             .keyboardShortcut(.defaultAction)
+            .help("写入剪贴板并向前置应用发送 ⌘V（需辅助功能权限）")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)

@@ -34,9 +34,11 @@
 	<string>NSApplication</string>
 	<key>NSPasteboardUsageDescription</key>
 	<string>HisCopy 需要读取系统剪贴板以保存历史记录，并在你点选条目时写回剪贴板。</string>
+	<key>NSAccessibilityUsageDescription</key>
+	<string>HisCopy 需要辅助功能权限，以便在你点选历史记录后向前置应用发送 ⌘V 完成粘贴。未授权时仍可将内容写入剪贴板，由你手动粘贴。</string>
 	<key>HisCopyDefaultGlobalHotKey</key>
 	<string>⇧⌘V</string>
 	<key>HisCopyGlobalHotKeyNotes</key>
-	<string>默认全局快捷键为 ⇧⌘V（Shift+Command+V），用于呼出/隐藏剪切板历史面板。基于 Carbon RegisterEventHotKey，可在设置中修改并立即生效。仅打开面板通常不需要辅助功能（Accessibility）权限；模拟按键粘贴才需要，本应用不模拟粘贴。</string>
+	<string>默认全局快捷键为 ⇧⌘V（Shift+Command+V），用于呼出/隐藏剪切板历史面板。基于 Carbon RegisterEventHotKey，可在设置中修改并立即生效。仅打开面板通常不需要辅助功能权限；点选历史后模拟 ⌘V 粘贴需要辅助功能权限。</string>
 </dict>
 </plist>

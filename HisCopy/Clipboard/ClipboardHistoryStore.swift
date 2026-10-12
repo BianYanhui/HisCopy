@@ -92,7 +92,7 @@ final class ClipboardHistoryStore: ObservableObject {
         }
     }
 
-    /// Write item back to the system pasteboard (no Accessibility paste).
+    /// Write item back to the system pasteboard（粘贴由 PasteController 负责模拟 ⌘V）。
     func copyToPasteboard(_ item: ClipboardItem) {
         ClipboardMonitor.shared.markNextWriteAsSelf()
         let pb = NSPasteboard.general
