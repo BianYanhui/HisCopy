@@ -40,14 +40,12 @@ final class ClipboardHistoryStore: ObservableObject {
     @Published var retentionAgeUnit: RetentionAgeUnit {
         didSet {
             UserDefaults.standard.set(retentionAgeUnit.rawValue, forKey: Self.retentionAgeUnitKey)
-            let clamped = retentionAgeUnit.clamped(retentionAgeValue)
-            if retentionAgeValue != clamped {
-                // Value didSet will trim + save.
-                retentionAgeValue = clamped
-            } else {
-                trimIfNeeded()
-                save()
-            }
+            // Do not clamp retentionAgeValue here — cross-property didSet during
+            // SwiftUI Picker/Stepper paint can expose a one-frame out-of-range
+            // Stepper binding and crash Settings on open. Use setRetentionAgeUnit(_:)
+            // or the Settings bindings which clamp before the range changes.
+            trimIfNeeded()
+            save()
         }
     }
 
@@ -61,6 +59,19 @@ final class ClipboardHistoryStore: ObservableObject {
             UserDefaults.standard.set(clamped, forKey: Self.retentionAgeValueKey)
             trimIfNeeded()
             save()
+        }
+    }
+
+    /// Switch unit after clamping value so SwiftUI Stepper never sees value ∉ range.
+    func setRetentionAgeUnit(_ unit: RetentionAgeUnit) {
+        let clamped = unit.clamped(retentionAgeValue)
+        // For these presets the clamped value stays valid under the old unit too,
+        // so assigning value first then unit keeps every intermediate frame safe.
+        if retentionAgeValue != clamped {
+            retentionAgeValue = clamped
+        }
+        if retentionAgeUnit != unit {
+            retentionAgeUnit = unit
         }
     }
 
@@ -305,10 +316,9 @@ final class ClipboardHistoryStore: ObservableObject {
 
     static func clampStorageMB(_ value: Int) -> Int {
         let presets = storageMBPresets
-        guard let minP = presets.first, let maxP = presets.last else {
-            return defaultMaxStorageMB
-        }
-        return min(max(value, minP), maxP)
+        guard !presets.isEmpty else { return defaultMaxStorageMB }
+        // Snap to nearest preset so Settings Picker selection always matches a tag.
+        return presets.min(by: { abs($0 - value) < abs($1 - value) }) ?? defaultMaxStorageMB
     }
 
     // MARK: - Persistence

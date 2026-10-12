@@ -17,6 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var escapeMonitor: Any?
     /// 点击面板外部关闭。
     private var clickOutsideMonitor: Any?
+    /// Dedicated settings window (accessory apps: Settings scene alone is unreliable).
+    private var settingsWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -276,9 +278,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        // Borderless panel: without a first responder, List won't get arrow keys
+        // until the user clicks. Prefer the hosting content view so key events flow.
+        if let content = window.contentView {
+            _ = window.makeFirstResponder(content)
+        }
         installPanelDismissMonitors()
         // 每次打开（含 orderOut 后复用）通知面板：选中最新并滚到顶。
         NotificationCenter.default.post(name: .hisCopyHistoryPanelDidOpen, object: nil)
+        // Re-assert key + first responder after AppKit finishes ordering front.
+        DispatchQueue.main.async {
+            window.makeKeyAndOrderFront(nil)
+            if let content = window.contentView {
+                _ = window.makeFirstResponder(content)
+            }
+        }
     }
 
     /// Esc 与点击外部关闭面板（再次 ⇧⌘V / 粘贴成功另有路径）。
@@ -346,7 +360,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings() {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        // Menu-bar (.accessory) apps: SwiftUI Settings scene + showSettingsWindow:
+        // often fails to key after Form crashes or on first paint. Host SettingsView
+        // in our own titled window so 设置… always works.
+        if let settingsWindow, settingsWindow.isVisible {
+            settingsWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let hosting = NSHostingController(rootView: SettingsView())
+        let window = NSWindow(contentViewController: hosting)
+        window.title = "HisCopy 设置"
+        window.styleMask = [.titled, .closable]
+        window.setContentSize(NSSize(width: 520, height: 640))
+        window.isReleasedWhenClosed = false
+        window.center()
+        settingsWindow = window
+        window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 

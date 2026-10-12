@@ -10,6 +10,7 @@ struct HistoryPanelView: View {
     /// 递增以请求 List 滚到当前 selection（打开面板 / 清空搜索）。
     @State private var scrollNonce = 0
     @FocusState private var searchFocused: Bool
+    @StateObject private var arrowKeyMonitor = PanelListArrowKeyMonitor()
 
     private var filtered: [ClipboardItem] {
         store.filtered(search: searchText)
@@ -42,17 +43,34 @@ struct HistoryPanelView: View {
             selectNewest(clearSearch: false)
             // Do NOT focus search on open — arrows/numpad must navigate the list immediately.
             searchFocused = false
+            arrowKeyMonitor.searchFocused = false
+            arrowKeyMonitor.start()
+        }
+        .onDisappear {
+            arrowKeyMonitor.stop()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .hisCopyHideHistoryPanel)) { _ in
+            arrowKeyMonitor.stop()
         }
         .onReceive(NotificationCenter.default.publisher(for: .hisCopyHistoryPanelDidOpen)) { _ in
             playAppearAnimation()
             selectNewest(clearSearch: true)
             searchFocused = false
+            arrowKeyMonitor.searchFocused = searchFocused
+            arrowKeyMonitor.start()
         }
         .onReceive(NotificationCenter.default.publisher(for: .hisCopyPanelEscapeRequested)) { _ in
             handleEscape()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .hisCopyPanelMoveSelection)) { note in
+            guard let delta = note.userInfo?["delta"] as? Int else { return }
+            moveSelection(by: delta)
+        }
         .onExitCommand {
             handleEscape()
+        }
+        .onChange(of: searchFocused) { focused in
+            arrowKeyMonitor.searchFocused = focused
         }
         .onChange(of: searchText) { _ in
             let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -103,6 +121,26 @@ struct HistoryPanelView: View {
         let items = store.filtered(search: clearSearch ? "" : searchText)
         withAnimation(HisCopyStyle.selection) {
             selection = items.first?.id
+        }
+        scrollNonce += 1
+    }
+
+    /// Move list selection by delta (−1 up / +1 down). Used when search is unfocused.
+    private func moveSelection(by delta: Int) {
+        let items = filtered
+        guard !items.isEmpty else { return }
+        let currentIndex: Int = {
+            if let id = selection, let idx = items.firstIndex(where: { $0.id == id }) {
+                return idx
+            }
+            // No selection: down → first, up → first (newest).
+            return delta > 0 ? -1 : 0
+        }()
+        let newIndex = max(0, min(items.count - 1, currentIndex + delta))
+        let newID = items[newIndex].id
+        guard newID != selection else { return }
+        withAnimation(HisCopyStyle.selection) {
+            selection = newID
         }
         scrollNonce += 1
     }
@@ -478,6 +516,69 @@ private struct PanelPasteDefaultActionShortcut: ViewModifier {
             content.keyboardShortcut(.defaultAction)
         } else {
             content
+        }
+    }
+}
+
+/// Local key monitor so ↑/↓ (and numpad 8/2) move selection without clicking the list.
+/// Borderless `NSPanel` + unfocused search leaves no List first-responder; this fills the gap.
+@MainActor
+private final class PanelListArrowKeyMonitor: ObservableObject {
+    var searchFocused = false
+    private var monitor: Any?
+
+    func start() {
+        stop()
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            guard !self.searchFocused else { return event }
+
+            // Only while the history panel itself is key (not Settings or other windows).
+            guard let key = NSApp.keyWindow,
+                  key.isVisible,
+                  key.title == "HisCopy" else {
+                return event
+            }
+
+            // Let real text editing keep arrow keys (e.g. if focus leaked to a field).
+            if let fr = key.firstResponder {
+                if fr is NSTextView || fr is NSTextField {
+                    return event
+                }
+            }
+
+            // Ignore when Command/Option/Control held; allow bare arrows (and fn/numpad bits).
+            let chord = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            guard chord.isEmpty else { return event }
+
+            let delta: Int
+            switch event.keyCode {
+            case 125: delta = 1   // ↓
+            case 126: delta = -1  // ↑
+            case 84:  delta = 1   // keypad 2
+            case 91:  delta = -1  // keypad 8
+            default:
+                return event
+            }
+            NotificationCenter.default.post(
+                name: .hisCopyPanelMoveSelection,
+                object: nil,
+                userInfo: ["delta": delta]
+            )
+            return nil
+        }
+    }
+
+    func stop() {
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+            self.monitor = nil
+        }
+    }
+
+    deinit {
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
         }
     }
 }

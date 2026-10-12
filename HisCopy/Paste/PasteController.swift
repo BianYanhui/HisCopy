@@ -11,6 +11,8 @@ extension Notification.Name {
     static let hisCopyHistoryPanelDidOpen = Notification.Name("HisCopyHistoryPanelDidOpen")
     /// Esc：由面板决定是退出搜索还是关闭窗口。
     static let hisCopyPanelEscapeRequested = Notification.Name("HisCopyPanelEscapeRequested")
+    /// userInfo["delta"] as Int: −1 up / +1 down when search is unfocused.
+    static let hisCopyPanelMoveSelection = Notification.Name("HisCopyPanelMoveSelection")
 }
 
 /// 将条目写回剪贴板后，用 Accessibility / CGEvent 向前置 App 发送 ⌘V。
