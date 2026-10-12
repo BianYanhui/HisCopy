@@ -196,11 +196,7 @@ struct HistoryPanelView: View {
             }
             .controlSize(.small)
             .disabled(selection == nil)
-            .modifier(PanelPasteKeyboardShortcut(
-                isArmed: pasteShortcutGate.isArmed,
-                key: .defaultAction,
-                modifiers: []
-            ))
+            .modifier(PanelPasteDefaultActionShortcut(isArmed: pasteShortcutGate.isArmed))
             .help("按原样写入剪贴板并向前置应用发送 ⌘V，然后关闭面板")
         }
         .padding(.horizontal, 14)
@@ -266,6 +262,19 @@ private struct PanelPasteKeyboardShortcut: ViewModifier {
     func body(content: Content) -> some View {
         if isArmed {
             content.keyboardShortcut(key, modifiers: modifiers)
+        } else {
+            content
+        }
+    }
+}
+
+private struct PanelPasteDefaultActionShortcut: ViewModifier {
+    let isArmed: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isArmed {
+            content.keyboardShortcut(.defaultAction)
         } else {
             content
         }
