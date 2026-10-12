@@ -29,7 +29,7 @@ struct SettingsView: View {
                 Toggle("粘贴后自动隐藏面板", isOn: $pasteController.autoHideAfterPaste)
                 LabeledContent("辅助功能") {
                     Text(pasteController.isAccessibilityTrusted ? "已授权" : "未授权")
-                        .foregroundStyle(pasteController.isAccessibilityTrusted ? .secondary : .orange)
+                        .foregroundStyle(pasteController.isAccessibilityTrusted ? Color.secondary : Color.orange)
                 }
                 Button("打开「隐私与安全性 → 辅助功能」…") {
                     pasteController.openAccessibilitySettings()
