@@ -4,6 +4,9 @@ import Combine
 
 /// 使用 Carbon `RegisterEventHotKey` 注册全局热键（零第三方依赖，思路接近 Maccy）。
 /// 仅用于呼出/隐藏面板；模拟 ⌘V 粘贴由 PasteController 负责（需要辅助功能权限）。
+///
+/// 只在 **keyDown（kEventHotKeyPressed）** 时 toggle；**忽略 keyUp（kEventHotKeyReleased）**。
+/// 同一次物理按下若系统重复投递 Pressed，在和弦松开前会被抑制，避免「松手又关面板」。
 @MainActor
 final class GlobalHotKeyManager: ObservableObject {
     static let shared = GlobalHotKeyManager()
@@ -22,6 +25,8 @@ final class GlobalHotKeyManager: ObservableObject {
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
     private var eventHandlerInstalled = false
+    /// 已处理过一次 Pressed，和弦尚未松开：忽略重复 Pressed，Released 只清旗标。
+    private var ignorePressedUntilChordRelease = false
 
     private init() {
         let defaults = UserDefaults.standard
@@ -42,6 +47,7 @@ final class GlobalHotKeyManager: ObservableObject {
 
     func stop() {
         unregister()
+        ignorePressedUntilChordRelease = false
     }
 
     /// 更新快捷键、写入 UserDefaults，并立即重新注册。
@@ -64,16 +70,23 @@ final class GlobalHotKeyManager: ObservableObject {
     private func installEventHandlerIfNeeded() {
         guard !eventHandlerInstalled else { return }
 
-        var spec = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
+        // 同时监听 Pressed / Released：Released 只用于清除抑制旗标，绝不 toggle。
+        var specs = [
+            EventTypeSpec(
+                eventClass: OSType(kEventClassKeyboard),
+                eventKind: UInt32(kEventHotKeyPressed)
+            ),
+            EventTypeSpec(
+                eventClass: OSType(kEventClassKeyboard),
+                eventKind: UInt32(kEventHotKeyReleased)
+            ),
+        ]
         let userData = Unmanaged.passUnretained(self).toOpaque()
         let status = InstallEventHandler(
             GetApplicationEventTarget(),
             hotKeyEventCallback,
-            1,
-            &spec,
+            Int(specs.count),
+            &specs,
             userData,
             &handlerRef
         )
@@ -84,14 +97,28 @@ final class GlobalHotKeyManager: ObservableObject {
         }
     }
 
-    fileprivate func handleCarbonHotKey(id: EventHotKeyID) {
+    fileprivate func handleCarbonHotKey(kind: UInt32, id: EventHotKeyID) {
         guard id.signature == Self.signature, id.id == Self.hotKeyID else { return }
+
+        if kind == UInt32(kEventHotKeyReleased) {
+            // keyUp：绝不 toggle，只允许下一次真正的 keyDown。
+            ignorePressedUntilChordRelease = false
+            return
+        }
+
+        guard kind == UInt32(kEventHotKeyPressed) else { return }
+
+        // 同一次按住期间的重复 Pressed（或与菜单 keyEquivalent 竞态）直接丢弃。
+        if ignorePressedUntilChordRelease { return }
+
+        ignorePressedUntilChordRelease = true
         onHotKeyPressed?()
     }
 
     private func registerCurrentShortcut() {
         unregister()
         registrationFailureMessage = nil
+        ignorePressedUntilChordRelease = false
 
         guard shortcut.isValid else {
             registrationFailureMessage = "快捷键无效：请至少包含一个修饰键（⌘ / ⌥ / ⌃ / ⇧）。"
@@ -138,6 +165,8 @@ private func hotKeyEventCallback(
         return OSStatus(eventNotHandledErr)
     }
 
+    let kind = GetEventKind(theEvent)
+
     var hotKeyID = EventHotKeyID()
     let err = GetEventParameter(
         theEvent,
@@ -154,7 +183,7 @@ private func hotKeyEventCallback(
 
     let manager = Unmanaged<GlobalHotKeyManager>.fromOpaque(userData).takeUnretainedValue()
     Task { @MainActor in
-        manager.handleCarbonHotKey(id: hotKeyID)
+        manager.handleCarbonHotKey(kind: kind, id: hotKeyID)
     }
     return noErr
 }

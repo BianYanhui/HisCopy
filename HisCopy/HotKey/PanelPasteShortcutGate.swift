@@ -6,6 +6,9 @@ import Combine
 /// Carbon 热键在 keyDown 时已打开面板；若此时仍按着 ⌘/V（常见：先松 ⇧），
 /// 面板成为 key window 后会把后续 key-repeat 或残余 ⌘V 当成粘贴快捷键。
 /// 本闸门在打开后禁用面板粘贴快捷键，直到修饰键与 V 全部松开。
+///
+/// **解锁（arm）只恢复面板内 ⌘V/回车，绝不隐藏面板。** 关面板由再次热键、
+/// Esc、粘贴成功、点外部等路径负责。
 @MainActor
 final class PanelPasteShortcutGate: ObservableObject {
     static let shared = PanelPasteShortcutGate()
@@ -26,7 +29,7 @@ final class PanelPasteShortcutGate: ObservableObject {
 
     private init() {}
 
-    /// 面板即将显示时调用：先上锁，等呼出和弦松开后再开锁。
+    /// 面板即将显示时调用：先上锁，等呼出和弦松开后再开锁（仅开锁，不关面板）。
     func beginArmingAfterPanelOpen() {
         tearDownMonitorAndPoll()
         isArmed = false
@@ -46,7 +49,7 @@ final class PanelPasteShortcutGate: ObservableObject {
         schedulePoll()
     }
 
-    /// 面板隐藏时复位（下次打开再重新闸门）。
+    /// 面板隐藏时复位（下次打开再重新闸门）。不由解锁路径调用。
     func reset() {
         tearDownMonitorAndPoll()
         isArmed = true
@@ -91,6 +94,7 @@ final class PanelPasteShortcutGate: ObservableObject {
         }
     }
 
+    /// 仅恢复粘贴快捷键；禁止在此隐藏窗口或发关闭通知。
     private func arm() {
         guard !isArmed else { return }
         isArmed = true
