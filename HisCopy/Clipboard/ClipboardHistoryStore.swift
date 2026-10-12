@@ -107,15 +107,19 @@ final class ClipboardHistoryStore: ObservableObject {
         let storedMB = UserDefaults.standard.object(forKey: Self.maxStorageMBKey) as? Int
         maxStorageMB = Self.clampStorageMB(storedMB ?? Self.defaultMaxStorageMB)
 
+        let unit: RetentionAgeUnit
         if let raw = UserDefaults.standard.string(forKey: Self.retentionAgeUnitKey),
-           let unit = RetentionAgeUnit(rawValue: raw) {
-            retentionAgeUnit = unit
+           let parsed = RetentionAgeUnit(rawValue: raw) {
+            unit = parsed
         } else {
-            retentionAgeUnit = Self.defaultAgeUnit
+            unit = Self.defaultAgeUnit
         }
-
         let storedAge = UserDefaults.standard.object(forKey: Self.retentionAgeValueKey) as? Int
-        retentionAgeValue = retentionAgeUnit.clamped(storedAge ?? Self.defaultAgeValue)
+        let ageValue = unit.clamped(storedAge ?? Self.defaultAgeValue)
+
+        // Assign after locals are ready so we don't touch self mid-init.
+        retentionAgeUnit = unit
+        retentionAgeValue = ageValue
 
         ensureDirectories()
         load()
