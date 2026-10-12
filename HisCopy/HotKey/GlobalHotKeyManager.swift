@@ -3,7 +3,7 @@ import Carbon
 import Combine
 
 /// 使用 Carbon `RegisterEventHotKey` 注册全局热键（零第三方依赖，思路接近 Maccy）。
-/// 仅用于呼出/隐藏面板，不模拟按键，因此通常不需要辅助功能（Accessibility）权限。
+/// 仅用于呼出/隐藏面板；模拟 ⌘V 粘贴由 PasteController 负责（需要辅助功能权限）。
 @MainActor
 final class GlobalHotKeyManager: ObservableObject {
     static let shared = GlobalHotKeyManager()

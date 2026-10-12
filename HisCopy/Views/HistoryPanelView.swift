@@ -48,13 +48,42 @@ struct HistoryPanelView: View {
             withAnimation(.easeOut(duration: 0.18)) {
                 appeared = true
             }
-        }
-        .onChange(of: selection) { newValue in
-            // Single-click copies for quick menu-bar use.
-            if let id = newValue, let item = store.items.first(where: { $0.id == id }) {
-                store.copyToPasteboard(item)
+            if selection == nil {
+                selection = filtered.first?.id
             }
         }
+        .onChange(of: searchText) { _ in
+            if let selection, filtered.contains(where: { $0.id == selection }) { return }
+            selection = filtered.first?.id
+        }
+    }
+
+    /// ⌘V：无格式纯文本 → 模拟粘贴 → 关闭面板。
+    private func pastePlainSelected() {
+        guard let item = selectedItem() else { return }
+        pastePlain(item)
+    }
+
+    /// 回车：有格式原文 → 模拟粘贴 → 关闭面板。
+    private func pasteFormattedSelected() {
+        guard let item = selectedItem() else { return }
+        pasteFormatted(item)
+    }
+
+    private func pastePlain(_ item: ClipboardItem) {
+        store.copyPlainTextToPasteboard(item)
+        PasteController.shared.pasteToFrontmostAppAndClose()
+    }
+
+    private func pasteFormatted(_ item: ClipboardItem) {
+        store.copyToPasteboard(item)
+        PasteController.shared.pasteToFrontmostAppAndClose()
+    }
+
+    private func selectedItem() -> ClipboardItem? {
+        guard let id = selection else { return nil }
+        return filtered.first(where: { $0.id == id })
+            ?? store.items.first(where: { $0.id == id })
     }
 
     private var toolbarStrip: some View {
@@ -95,14 +124,21 @@ struct HistoryPanelView: View {
                     HistoryRow(item: item)
                         .tag(item.id)
                         .contentShape(Rectangle())
-                        .onTapGesture(count: 2) {
-                            store.copyToPasteboard(item)
-                        }
                         .contextMenu {
+                            Button {
+                                pastePlain(item)
+                            } label: {
+                                Label("粘贴纯文本（⌘V）", systemImage: "doc.plaintext")
+                            }
+                            Button {
+                                pasteFormatted(item)
+                            } label: {
+                                Label("粘贴原文（↩）", systemImage: "doc.richtext")
+                            }
                             Button {
                                 store.copyToPasteboard(item)
                             } label: {
-                                Label("复制到剪贴板", systemImage: "doc.on.doc")
+                                Label("仅复制到剪贴板", systemImage: "doc.on.doc")
                             }
                             Divider()
                             Button(role: .destructive) {
@@ -133,16 +169,29 @@ struct HistoryPanelView: View {
 
             Spacer(minLength: 0)
 
+            Text("⌘V 纯文本 · ↩ 有格式")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+
             Button {
-                if let id = selection, let item = store.items.first(where: { $0.id == id }) {
-                    store.copyToPasteboard(item)
-                }
+                pastePlainSelected()
             } label: {
-                Label("复制所选", systemImage: "doc.on.clipboard")
+                Label("纯文本", systemImage: "doc.plaintext")
+            }
+            .controlSize(.small)
+            .disabled(selection == nil)
+            .keyboardShortcut("v", modifiers: .command)
+            .help("写入无格式纯文本并向前置应用发送 ⌘V，然后关闭面板")
+
+            Button {
+                pasteFormattedSelected()
+            } label: {
+                Label("粘贴原文", systemImage: "doc.richtext")
             }
             .controlSize(.small)
             .disabled(selection == nil)
             .keyboardShortcut(.defaultAction)
+            .help("按原样写入剪贴板并向前置应用发送 ⌘V，然后关闭面板")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)

@@ -4,6 +4,7 @@ struct SettingsView: View {
     @AppStorage("launchAtLogin") private var launchAtLogin = false
     @ObservedObject private var updater = AppUpdater.shared
     @ObservedObject private var store = ClipboardHistoryStore.shared
+    @ObservedObject private var pasteController = PasteController.shared
 
     var body: some View {
         Form {
@@ -21,7 +22,24 @@ struct SettingsView: View {
             } header: {
                 Text("剪贴板")
             } footer: {
-                Text("选中历史条目会复制回系统剪贴板；本版本不模拟按键粘贴（无需辅助功能权限）。")
+                Text("在历史面板中：⌘V 粘贴无格式纯文本并关闭；回车粘贴有格式原文并关闭。")
+            }
+
+            Section {
+                LabeledContent("辅助功能") {
+                    Text(pasteController.isAccessibilityTrusted ? "已授权" : "未授权")
+                        .foregroundStyle(pasteController.isAccessibilityTrusted ? Color.secondary : Color.orange)
+                }
+                Button("打开「隐私与安全性 → 辅助功能」…") {
+                    pasteController.openAccessibilitySettings()
+                }
+                Button("重新检查权限") {
+                    pasteController.refreshAccessibilityStatus()
+                }
+            } header: {
+                Text("粘贴")
+            } footer: {
+                Text("一键粘贴使用 Accessibility / CGEvent 模拟 ⌘V。未授权时仅写入剪贴板，并提示前往系统设置授权。可在「系统设置 → 隐私与安全性 → 辅助功能」中勾选 HisCopy。")
             }
 
             Section {
@@ -33,11 +51,10 @@ struct SettingsView: View {
             } header: {
                 Text("全局快捷键")
             } footer: {
-                Text("默认 ⇧⌘V（Shift+Command+V）。使用系统 Carbon RegisterEventHotKey，改后立即生效并写入偏好设置。仅打开面板，通常无需辅助功能（Accessibility）权限；模拟 ⌘V 粘贴才需要，本应用不模拟粘贴。")
+                Text("默认 ⇧⌘V（Shift+Command+V），面板显示在屏幕正中。使用系统 Carbon RegisterEventHotKey，改后立即生效。仅打开面板通常无需辅助功能权限；模拟 ⌘V 粘贴才需要。菜单栏图标使用常规菜单。")
             }
 
             Section {
-                // 占位：暂不真正注册 SMAppService
                 Toggle("开机时启动 HisCopy", isOn: $launchAtLogin)
             } header: {
                 Text("通用")
@@ -63,7 +80,10 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 480, height: 460)
+        .frame(width: 500, height: 540)
+        .onAppear {
+            pasteController.refreshAccessibilityStatus()
+        }
     }
 }
 

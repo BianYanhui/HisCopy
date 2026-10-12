@@ -10,6 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var historyMenuItem: NSMenuItem?
     private var hotKeyStatusMenuItem: NSMenuItem?
     private var cancellables = Set<AnyCancellable>()
+    /// 打开面板前的前置应用，粘贴时再激活以便 ⌘V 命中正确目标。
+    private var previousFrontmostApp: NSRunningApplication?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -31,6 +33,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: .hisCopyWillQuitForUpdate,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleHideHistoryPanel),
+            name: .hisCopyHideHistoryPanel,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handlePrepareForPaste(_:)),
+            name: .hisCopyPrepareForPaste,
+            object: nil
+        )
         AppUpdater.shared.checkOnLaunchIfNeeded()
     }
 
@@ -43,6 +57,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         GlobalHotKeyManager.shared.stop()
         ClipboardMonitor.shared.stop()
         historyWindow?.orderOut(nil)
+    }
+
+    @objc private func handleHideHistoryPanel() {
+        historyWindow?.orderOut(nil)
+    }
+
+    @objc private func handlePrepareForPaste(_ notification: Notification) {
+        let hide = (notification.userInfo?["hidePanel"] as? Bool) ?? true
+        prepareForPasteToFrontmostApp(hidePanel: hide)
     }
 
     private func setupStatusItem() {
@@ -204,17 +227,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.hasShadow = true
         window.isReleasedWhenClosed = false
         window.animationBehavior = .utilityWindow
+        window.level = .floating
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.contentViewController = hosting
         historyWindow = window
         presentHistoryWindow(window)
     }
 
     private func presentHistoryWindow(_ window: NSWindow) {
-        if !window.isVisible {
-            window.center()
+        let front = NSWorkspace.shared.frontmostApplication
+        if front?.bundleIdentifier != Bundle.main.bundleIdentifier {
+            previousFrontmostApp = front
         }
+        // ⇧⌘V 呼出：始终居中于当前屏幕。
+        window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// 供粘贴流程调用：收起面板，并把焦点交回先前前置应用。
+    func prepareForPasteToFrontmostApp(hidePanel: Bool) {
+        if hidePanel {
+            historyWindow?.orderOut(nil)
+        }
+        if let app = previousFrontmostApp, !app.isTerminated {
+            app.activate(options: [.activateIgnoringOtherApps])
+        }
     }
 
     @objc private func togglePauseCapture() {
