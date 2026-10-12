@@ -75,10 +75,8 @@ final class PasteFocusCoordinator {
     private func activate(_ app: NSRunningApplication) {
         if #available(macOS 14.0, *) {
             // Yield from HisCopy; activateAllWindows restores sheets/dialogs as key.
-            _ = app.activate(
-                fromApplication: NSRunningApplication.current,
-                options: [.activateAllWindows]
-            )
+            // SDK label is `from:` (ObjC: fromApplication:).
+            _ = app.activate(from: NSRunningApplication.current, options: [.activateAllWindows])
             if NSWorkspace.shared.frontmostApplication?.processIdentifier != app.processIdentifier {
                 _ = app.activate()
             }
