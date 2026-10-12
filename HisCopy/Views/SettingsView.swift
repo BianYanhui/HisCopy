@@ -10,11 +10,40 @@ struct SettingsView: View {
         Form {
             Section {
                 Toggle("暂停捕获", isOn: $store.isPaused)
-                LabeledContent("历史条数") {
-                    Text("\(store.items.count) / \(ClipboardHistoryStore.maxItems)")
+
+                LabeledContent("当前用量") {
+                    Text(store.formattedUsageSummary)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
+
+                Picker("存储上限", selection: $store.maxStorageMB) {
+                    ForEach(ClipboardHistoryStore.storageMBPresets, id: \.self) { mb in
+                        Text("\(mb) MB").tag(mb)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("保留时长")
+                    HStack(spacing: 12) {
+                        Picker("单位", selection: $store.retentionAgeUnit) {
+                            ForEach(RetentionAgeUnit.allCases) { unit in
+                                Text(unit.label).tag(unit)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(maxWidth: 200)
+
+                        Stepper(value: $store.retentionAgeValue,
+                                in: store.retentionAgeUnit.minValue...store.retentionAgeUnit.maxValue) {
+                            Text("\(store.retentionAgeValue) \(store.retentionAgeUnit.label)")
+                                .monospacedDigit()
+                                .frame(minWidth: 72, alignment: .leading)
+                        }
+                    }
+                }
+
                 Button("清空历史", role: .destructive) {
                     store.clearAll()
                 }
@@ -22,7 +51,7 @@ struct SettingsView: View {
             } header: {
                 Text("剪贴板")
             } footer: {
-                Text("在历史面板中：⌘V 粘贴无格式纯文本并关闭；回车粘贴有格式原文并关闭。")
+                Text("超出存储上限或保留时长时，自动丢弃最旧的非收藏条目。收藏条目不会被自动清理；「清空历史」仍会删除全部（含收藏）。面板中：⌘V 粘贴纯文本并关闭；回车粘贴原文并关闭；⌘F 搜索。")
             }
 
             Section {
@@ -80,7 +109,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 500, height: 540)
+        .frame(width: 520, height: 620)
         .onAppear {
             pasteController.refreshAccessibilityStatus()
         }

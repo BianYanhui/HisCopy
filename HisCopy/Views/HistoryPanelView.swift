@@ -36,19 +36,23 @@ struct HistoryPanelView: View {
         .clipShape(RoundedRectangle(cornerRadius: HisCopyStyle.panelCornerRadius, style: .continuous))
         .opacity(appeared ? 1 : 0)
         .scaleEffect(appeared ? 1 : 0.96, anchor: .center)
+        .background(searchFocusShortcut)
         .onAppear {
             playAppearAnimation()
             selectNewest(clearSearch: false)
-            DispatchQueue.main.async {
-                searchFocused = true
-            }
+            // Do NOT focus search on open — arrows/numpad must navigate the list immediately.
+            searchFocused = false
         }
         .onReceive(NotificationCenter.default.publisher(for: .hisCopyHistoryPanelDidOpen)) { _ in
             playAppearAnimation()
             selectNewest(clearSearch: true)
-            DispatchQueue.main.async {
-                searchFocused = true
-            }
+            searchFocused = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .hisCopyPanelEscapeRequested)) { _ in
+            handleEscape()
+        }
+        .onExitCommand {
+            handleEscape()
         }
         .onChange(of: searchText) { _ in
             let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -59,6 +63,29 @@ struct HistoryPanelView: View {
                 scrollNonce += 1
             }
         }
+    }
+
+    /// Hidden ⌘F affordance to enter search mode without focusing the field on open.
+    private var searchFocusShortcut: some View {
+        Button("搜索") {
+            searchFocused = true
+        }
+        .keyboardShortcut("f", modifiers: .command)
+        .opacity(0)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func handleEscape() {
+        if searchFocused {
+            searchFocused = false
+            return
+        }
+        if !searchText.isEmpty {
+            searchText = ""
+            return
+        }
+        NotificationCenter.default.post(name: .hisCopyHideHistoryPanel, object: nil)
     }
 
     private func playAppearAnimation() {
@@ -161,7 +188,7 @@ struct HistoryPanelView: View {
                 .buttonStyle(.borderless)
                 .foregroundStyle(.secondary)
                 .disabled(store.items.isEmpty)
-                .help("清空全部历史")
+                .help("清空全部历史（含收藏）")
                 .accessibilityLabel("清空")
             }
 
@@ -192,8 +219,14 @@ struct HistoryPanelView: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                    .strokeBorder(
+                        searchFocused
+                            ? Color.accentColor.opacity(0.45)
+                            : Color.primary.opacity(0.08),
+                        lineWidth: 0.5
+                    )
             )
+            .help("⌘F 聚焦搜索")
         }
         .padding(.horizontal, HisCopyStyle.stripHorizontalPadding)
         .padding(.top, 12)
@@ -244,6 +277,15 @@ struct HistoryPanelView: View {
                                     Label("仅复制到剪贴板", systemImage: "doc.on.doc")
                                 }
                                 Divider()
+                                Button {
+                                    store.toggleFavorite(id: item.id)
+                                } label: {
+                                    Label(
+                                        item.isFavorite ? "取消收藏" : "收藏",
+                                        systemImage: item.isFavorite ? "star.slash" : "star"
+                                    )
+                                }
+                                Divider()
                                 Button(role: .destructive) {
                                     store.remove(id: item.id)
                                     if selection == item.id { selection = nil }
@@ -274,14 +316,16 @@ struct HistoryPanelView: View {
         }
     }
 
-    /// 底栏：左侧计数，右侧两枚动作按钮（键帽嵌在按钮内，去掉重复提示簇）。
+    /// 底栏：左侧用量，右侧两枚动作按钮（键帽嵌在按钮内，去掉重复提示簇）。
     private var footerBar: some View {
         HStack(alignment: .center, spacing: 12) {
-            Text("\(store.items.count) / \(ClipboardHistoryStore.maxItems)")
+            Text(store.formattedUsageSummary)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
-                .accessibilityLabel("历史 \(store.items.count) 条，上限 \(ClipboardHistoryStore.maxItems)")
+                .lineLimit(1)
+                .help("收藏条目不计入自动清理；清空仍会删除全部。")
+                .accessibilityLabel("历史 \(store.items.count) 条，约 \(ClipboardHistoryStore.formatByteCount(store.approximateTotalBytes))")
 
             Spacer(minLength: 8)
 
@@ -363,6 +407,8 @@ private struct HistoryRow: View {
                         .monospacedDigit()
                 }
             }
+
+            favoriteButton
         }
         .padding(.vertical, HisCopyStyle.rowVerticalPadding)
         .padding(.horizontal, 6)
@@ -376,8 +422,24 @@ private struct HistoryRow: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(item.kindLabel)，\(item.textPreview)")
+        .accessibilityLabel("\(item.kindLabel)，\(item.textPreview)\(item.isFavorite ? "，已收藏" : "")")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private var favoriteButton: some View {
+        Button {
+            store.toggleFavorite(id: item.id)
+        } label: {
+            Image(systemName: item.isFavorite ? "star.fill" : "star")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(item.isFavorite ? Color.yellow : Color.secondary)
+                .opacity(item.isFavorite || isHovered || isSelected ? 1 : 0.28)
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .help(item.isFavorite ? "取消收藏" : "收藏（免于按容量/时间自动清理）")
+        .accessibilityLabel(item.isFavorite ? "取消收藏" : "收藏")
     }
 
     @ViewBuilder
