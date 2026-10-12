@@ -1,0 +1,80 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build HisCopy.app (macOS)
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build (unsigned, universal)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project HisCopy.xcodeproj \
+            -scheme HisCopy \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath build \
+            ARCHS="arm64 x86_64" \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee xcodebuild.log
+
+      - name: Ad-hoc sign and zip
+        run: |
+          APP="build/Build/Products/Release/HisCopy.app"
+          test -d "$APP"
+          # Ad-hoc signature (no certificate) so the app runs on Apple Silicon.
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --verbose "$APP"
+          lipo -info "$APP/Contents/MacOS/HisCopy"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" HisCopy.zip
+          ls -lh HisCopy.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: HisCopy.zip
+          path: HisCopy.zip
+          # Upload the zip as-is so the download is HisCopy.zip, not a zip in a zip.
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: xcodebuild-log
+          path: xcodebuild.log
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" HisCopy.zip --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" HisCopy.zip --title "HisCopy $GITHUB_REF_NAME" --generate-notes
+          fi
