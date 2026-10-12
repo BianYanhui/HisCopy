@@ -35,11 +35,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
-            button.image = statusImage(paused: ClipboardHistoryStore.shared.isPaused)
-            button.image?.isTemplate = true
+            let image = statusImage(paused: ClipboardHistoryStore.shared.isPaused)
+            image?.isTemplate = true
+            button.image = image
+            button.toolTip = "HisCopy"
         }
 
         let menu = NSMenu()
+        menu.autoenablesItems = true
 
         let historyItem = NSMenuItem(title: "显示历史", action: #selector(showHistoryPanel), keyEquivalent: "h")
         historyItem.target = self
@@ -54,7 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(pauseItem)
         pauseMenuItem = pauseItem
 
-        menu.addItem(NSMenuItem.separator())
+        menu.addItem(.separator())
 
         let updateItem = NSMenuItem(title: "检查更新…", action: #selector(checkForUpdates), keyEquivalent: "")
         updateItem.target = self
@@ -69,7 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsItem.target = self
         menu.addItem(settingsItem)
 
-        menu.addItem(NSMenuItem.separator())
+        menu.addItem(.separator())
 
         let quitItem = NSMenuItem(title: "退出 HisCopy", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
@@ -91,8 +94,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updatePauseUI(paused: Bool) {
         pauseMenuItem?.title = pauseTitle(paused: paused)
         if let button = statusItem?.button {
-            button.image = statusImage(paused: paused)
-            button.image?.isTemplate = true
+            let image = statusImage(paused: paused)
+            image?.isTemplate = true
+            button.image = image
         }
     }
 
@@ -102,31 +106,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func statusImage(paused: Bool) -> NSImage? {
         let symbol = paused ? "pause.circle" : "doc.on.clipboard"
-        return NSImage(systemSymbolName: symbol, accessibilityDescription: "HisCopy")
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "HisCopy")
+        image?.isTemplate = true
+        return image
     }
 
     @objc private func showHistoryPanel() {
         if let window = historyWindow {
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            presentHistoryWindow(window)
             return
         }
 
         let rootView = HistoryPanelView()
         let hosting = NSHostingController(rootView: rootView)
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 520),
-            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+
+        let window = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 540),
+            styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .utilityWindow],
             backing: .buffered,
             defer: false
         )
-        window.title = "HisCopy 历史"
-        window.contentViewController = hosting
-        window.center()
+        window.title = "HisCopy"
+        window.titleVisibility = .visible
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
         window.isReleasedWhenClosed = false
+        window.animationBehavior = .utilityWindow
+        window.contentViewController = hosting
+        historyWindow = window
+        presentHistoryWindow(window)
+    }
+
+    private func presentHistoryWindow(_ window: NSWindow) {
+        if !window.isVisible {
+            window.center()
+        }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        historyWindow = window
     }
 
     @objc private func togglePauseCapture() {
