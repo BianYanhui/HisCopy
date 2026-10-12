@@ -225,7 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.16
+            ctx.duration = 0.18
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
             window.animator().alphaValue = 0
         }, completionHandler: {
@@ -373,7 +373,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let window = NSWindow(contentViewController: hosting)
         window.title = "HisCopy 设置"
         window.styleMask = [.titled, .closable]
-        window.setContentSize(NSSize(width: 520, height: 640))
+        window.setContentSize(NSSize(width: 520, height: 660))
         window.isReleasedWhenClosed = false
         window.center()
         settingsWindow = window

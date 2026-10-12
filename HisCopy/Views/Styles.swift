@@ -9,23 +9,29 @@ enum HisCopyStyle {
     static let panelMinHeight: CGFloat = 480
     /// Continuous corner used by SwiftUI chrome and AppKit contentView mask.
     static let panelCornerRadius: CGFloat = 14
-    static let thumbnailSize: CGFloat = 38
-    static let thumbnailCorner: CGFloat = 7
-    static let symbolWellSize: CGFloat = 38
-    static let symbolWellCorner: CGFloat = 9
-    static let rowCorner: CGFloat = 9
-    static let rowVerticalPadding: CGFloat = 7
-    static let rowHorizontalInset: CGFloat = 10
-    static let contentSpacing: CGFloat = 12
+    static let thumbnailSize: CGFloat = 34
+    static let thumbnailCorner: CGFloat = 6
+    static let symbolWellSize: CGFloat = 34
+    static let symbolWellCorner: CGFloat = 8
+    static let rowCorner: CGFloat = 8
+    static let rowVerticalPadding: CGFloat = 6
+    static let rowHorizontalInset: CGFloat = 8
+    static let contentSpacing: CGFloat = 10
+    /// Header / footer / search share one horizontal rhythm.
     static let stripHorizontalPadding: CGFloat = 14
     static let stripVerticalPadding: CGFloat = 10
-    static let footerVerticalPadding: CGFloat = 10
+    static let footerVerticalPadding: CGFloat = 9
+    static let headerTopPadding: CGFloat = 12
+    static let headerBottomPadding: CGFloat = 8
+    static let searchFieldCorner: CGFloat = 8
     static let keyCapCorner: CGFloat = 5
+    /// Selected leading visual scale (Pulse rail selection feel ≈ 1.06).
+    static let selectionScale: CGFloat = 1.06
     /// Hairline on light surfaces (Pulse PanelLight.edge idea: readable edge, not sliced).
-    static let panelEdgeOpacity: Double = 0.14
+    static let panelEdgeOpacity: Double = 0.12
     /// Soft scrim under material so wallpaper colour does not bleed through (esp. pink/red).
-    static let panelScrimOpacityLight: Double = 0.72
-    static let panelScrimOpacityDark: Double = 0.55
+    static let panelScrimOpacityLight: Double = 0.78
+    static let panelScrimOpacityDark: Double = 0.58
 
     /// Panel appear / expand (Pulse-like spring, Apple-native).
     static var panelAppear: Animation {
@@ -40,6 +46,11 @@ enum HisCopyStyle {
     /// Short hover wash.
     static var hover: Animation {
         .easeOut(duration: 0.12)
+    }
+
+    /// Row insert / empty-state transition.
+    static var contentTransition: Animation {
+        .spring(response: 0.30, dampingFraction: 0.88)
     }
 
     static let relativeTime: RelativeDateTimeFormatter = {
@@ -75,7 +86,7 @@ struct PanelChromeBackground: View {
             return Color.black.opacity(HisCopyStyle.panelScrimOpacityDark)
         }
         // Slight cool-neutral grey (not pure white) so the panel reads as a surface.
-        return Color(white: 0.96).opacity(HisCopyStyle.panelScrimOpacityLight)
+        return Color(white: 0.97).opacity(HisCopyStyle.panelScrimOpacityLight)
     }
 }
 
@@ -83,15 +94,28 @@ struct PanelChromeBackground: View {
 struct SymbolWell: View {
     let systemName: String
     var size: CGFloat = HisCopyStyle.symbolWellSize
+    var isSelected: Bool = false
 
     var body: some View {
         Image(systemName: systemName)
-            .font(.system(size: size * 0.42, weight: .medium))
-            .foregroundStyle(.secondary)
+            .font(.system(size: size * 0.40, weight: .semibold))
+            .symbolRenderingMode(.hierarchical)
+            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
             .frame(width: size, height: size)
             .background(
                 RoundedRectangle(cornerRadius: HisCopyStyle.symbolWellCorner, style: .continuous)
-                    .fill(.quaternary.opacity(0.65))
+                    .fill(isSelected
+                          ? Color.accentColor.opacity(0.16)
+                          : Color.primary.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: HisCopyStyle.symbolWellCorner, style: .continuous)
+                    .strokeBorder(
+                        isSelected
+                            ? Color.accentColor.opacity(0.22)
+                            : Color.primary.opacity(0.05),
+                        lineWidth: 0.5
+                    )
             )
     }
 }
@@ -99,6 +123,7 @@ struct SymbolWell: View {
 struct ThumbnailImage: View {
     let image: NSImage
     var size: CGFloat = HisCopyStyle.thumbnailSize
+    var isSelected: Bool = false
 
     var body: some View {
         Image(nsImage: image)
@@ -108,7 +133,12 @@ struct ThumbnailImage: View {
             .clipShape(RoundedRectangle(cornerRadius: HisCopyStyle.thumbnailCorner, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: HisCopyStyle.thumbnailCorner, style: .continuous)
-                    .strokeBorder(.separator.opacity(0.7), lineWidth: 0.5)
+                    .strokeBorder(
+                        isSelected
+                            ? Color.accentColor.opacity(0.45)
+                            : Color.primary.opacity(0.10),
+                        lineWidth: isSelected ? 1 : 0.5
+                    )
             )
     }
 }
@@ -119,19 +149,21 @@ struct EmptyHistoryState: View {
     let systemImage: String
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 10) {
             Spacer(minLength: 0)
             Image(systemName: systemImage)
-                .font(.system(size: 42, weight: .light))
+                .font(.system(size: 36, weight: .ultraLight))
                 .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.tertiary)
             Text(title)
-                .font(.callout)
+                .font(.callout.weight(.medium))
                 .foregroundStyle(.secondary)
             if let subtitle, !subtitle.isEmpty {
                 Text(subtitle)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary.opacity(0.85))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
             }
             Spacer(minLength: 0)
         }
@@ -154,13 +186,38 @@ struct ShortcutKeyCap: View {
             .padding(.vertical, 2)
             .background(
                 RoundedRectangle(cornerRadius: HisCopyStyle.keyCapCorner, style: .continuous)
-                    .fill(.quaternary.opacity(0.7))
+                    .fill(Color.primary.opacity(0.07))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: HisCopyStyle.keyCapCorner, style: .continuous)
-                    .strokeBorder(.separator.opacity(0.55), lineWidth: 0.5)
+                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
             )
             .accessibilityHidden(true)
+    }
+}
+
+/// Compact icon toolbar button used in the history header.
+struct PanelIconButton: View {
+    let systemName: String
+    let helpText: String
+    var disabled: Bool = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(disabled ? Color.secondary.opacity(0.45) : Color.secondary)
+                .frame(width: 26, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.primary.opacity(0.05))
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .disabled(disabled)
+        .help(helpText)
     }
 }
 
@@ -172,16 +229,27 @@ struct HistoryRowHighlight: View {
     var body: some View {
         RoundedRectangle(cornerRadius: HisCopyStyle.rowCorner, style: .continuous)
             .fill(fill)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 1)
+            .overlay(
+                RoundedRectangle(cornerRadius: HisCopyStyle.rowCorner, style: .continuous)
+                    .strokeBorder(stroke, lineWidth: 0.5)
+            )
+            .padding(.horizontal, 2)
+            .padding(.vertical, 0)
     }
 
     private var fill: Color {
         if isSelected {
-            return Color.accentColor.opacity(0.18)
+            return Color.accentColor.opacity(0.16)
         }
         if isHovered {
-            return Color.primary.opacity(0.06)
+            return Color.primary.opacity(0.05)
+        }
+        return .clear
+    }
+
+    private var stroke: Color {
+        if isSelected {
+            return Color.accentColor.opacity(0.22)
         }
         return .clear
     }

@@ -20,15 +20,11 @@ struct HistoryPanelView: View {
         VStack(spacing: 0) {
             headerBar
 
-            Divider()
-                .opacity(0.5)
-                .padding(.horizontal, 10)
+            insetDivider
 
             content
 
-            Divider()
-                .opacity(0.5)
-                .padding(.horizontal, 10)
+            insetDivider
 
             footerBar
         }
@@ -36,7 +32,7 @@ struct HistoryPanelView: View {
         .background { PanelChromeBackground() }
         .clipShape(RoundedRectangle(cornerRadius: HisCopyStyle.panelCornerRadius, style: .continuous))
         .opacity(appeared ? 1 : 0)
-        .scaleEffect(appeared ? 1 : 0.96, anchor: .center)
+        .scaleEffect(appeared ? 1 : 0.97, anchor: .center)
         .background(searchFocusShortcut)
         .onAppear {
             playAppearAnimation()
@@ -81,6 +77,12 @@ struct HistoryPanelView: View {
                 scrollNonce += 1
             }
         }
+    }
+
+    private var insetDivider: some View {
+        Divider()
+            .opacity(0.45)
+            .padding(.horizontal, HisCopyStyle.stripHorizontalPadding)
     }
 
     /// Hidden ⌘F affordance to enter search mode without focusing the field on open.
@@ -185,24 +187,14 @@ struct HistoryPanelView: View {
 
     private var headerBar: some View {
         VStack(spacing: 8) {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Text("历史")
-                    .font(.headline)
+                    .font(.system(.headline, design: .rounded).weight(.semibold))
                     .foregroundStyle(.primary)
 
-                Text(store.isPaused ? "已暂停" : "捕获中")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(store.isPaused ? Color.secondary : Color.accentColor)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(
-                        Capsule(style: .continuous)
-                            .fill(store.isPaused
-                                  ? Color.primary.opacity(0.06)
-                                  : Color.accentColor.opacity(0.14))
-                    )
+                statusPill
 
-                Spacer(minLength: 0)
+                Spacer(minLength: 8)
 
                 Toggle(isOn: Binding(
                     get: { !store.isPaused },
@@ -216,59 +208,93 @@ struct HistoryPanelView: View {
                 .help(store.isPaused ? "恢复剪贴板捕获" : "暂停剪贴板捕获")
                 .accessibilityLabel(store.isPaused ? "已暂停捕获" : "捕获中")
 
-                Button {
+                PanelIconButton(
+                    systemName: "trash",
+                    helpText: "清空全部历史（含收藏）",
+                    disabled: store.items.isEmpty
+                ) {
                     store.clearAll()
                     selection = nil
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 12, weight: .medium))
                 }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
-                .disabled(store.items.isEmpty)
-                .help("清空全部历史（含收藏）")
                 .accessibilityLabel("清空")
             }
 
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-                TextField("搜索历史", text: $searchText)
-                    .textFieldStyle(.plain)
-                    .focused($searchFocused)
-                if !searchText.isEmpty {
-                    Button {
-                        searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel("清除搜索")
-                }
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.primary.opacity(0.055))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(
-                        searchFocused
-                            ? Color.accentColor.opacity(0.45)
-                            : Color.primary.opacity(0.08),
-                        lineWidth: 0.5
-                    )
-            )
-            .help("⌘F 聚焦搜索")
+            searchField
         }
         .padding(.horizontal, HisCopyStyle.stripHorizontalPadding)
-        .padding(.top, 12)
-        .padding(.bottom, 8)
+        .padding(.top, HisCopyStyle.headerTopPadding)
+        .padding(.bottom, HisCopyStyle.headerBottomPadding)
+    }
+
+    private var statusPill: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(store.isPaused ? Color.secondary.opacity(0.55) : Color.accentColor)
+                .frame(width: 5, height: 5)
+            Text(store.isPaused ? "已暂停" : "捕获中")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(store.isPaused ? Color.secondary : Color.accentColor)
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(
+            Capsule(style: .continuous)
+                .fill(store.isPaused
+                      ? Color.primary.opacity(0.05)
+                      : Color.accentColor.opacity(0.12))
+        )
+        .accessibilityHidden(true)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(searchFocused ? Color.accentColor : Color.secondary)
+            TextField("搜索历史", text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.callout)
+                .focused($searchFocused)
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("清除搜索")
+            } else {
+                Text("⌘F")
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(Color.primary.opacity(0.05))
+                    )
+                    .accessibilityHidden(true)
+            }
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: HisCopyStyle.searchFieldCorner, style: .continuous)
+                .fill(Color.primary.opacity(searchFocused ? 0.07 : 0.045))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: HisCopyStyle.searchFieldCorner, style: .continuous)
+                .strokeBorder(
+                    searchFocused
+                        ? Color.accentColor.opacity(0.50)
+                        : Color.primary.opacity(0.08),
+                    lineWidth: searchFocused ? 1 : 0.5
+                )
+        )
+        .animation(HisCopyStyle.hover, value: searchFocused)
+        .help("⌘F 聚焦搜索")
     }
 
     @ViewBuilder
@@ -276,11 +302,13 @@ struct HistoryPanelView: View {
         if filtered.isEmpty {
             EmptyHistoryState(
                 title: store.items.isEmpty ? "尚无历史" : "无匹配结果",
-                subtitle: store.isPaused ? "捕获已暂停" : (store.items.isEmpty ? "复制内容后会出现在这里" : nil),
+                subtitle: store.isPaused
+                    ? "捕获已暂停"
+                    : (store.items.isEmpty ? "复制内容后会出现在这里" : "试试其他关键词"),
                 systemImage: store.items.isEmpty ? "doc.on.clipboard" : "magnifyingglass"
             )
             .transition(
-                .opacity.combined(with: .offset(y: -6))
+                .opacity.combined(with: .offset(y: -4))
             )
         } else {
             ScrollViewReader { proxy in
@@ -291,9 +319,9 @@ struct HistoryPanelView: View {
                             .id(item.id)
                             .contentShape(Rectangle())
                             .listRowInsets(EdgeInsets(
-                                top: 3,
+                                top: 2,
                                 leading: HisCopyStyle.rowHorizontalInset,
-                                bottom: 3,
+                                bottom: 2,
                                 trailing: HisCopyStyle.rowHorizontalInset
                             ))
                             .listRowSeparator(.hidden)
@@ -349,21 +377,27 @@ struct HistoryPanelView: View {
                 }
             }
             .transition(
-                .opacity.combined(with: .offset(y: 4))
+                .opacity.combined(with: .offset(y: 3))
             )
         }
     }
 
-    /// 底栏：左侧用量，右侧两枚动作按钮（键帽嵌在按钮内，去掉重复提示簇）。
+    /// 底栏：左侧用量，右侧两枚动作按钮（键帽嵌在按钮内）。
     private var footerBar: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Text(store.formattedUsageSummary)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-                .lineLimit(1)
-                .help("收藏条目不计入自动清理；清空仍会删除全部。")
-                .accessibilityLabel("历史 \(store.items.count) 条，约 \(ClipboardHistoryStore.formatByteCount(store.approximateTotalBytes))")
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(store.formattedUsageSummary)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                Text("收藏免于自动清理")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            .help("收藏条目不计入自动清理；清空仍会删除全部。")
+            .accessibilityLabel("历史 \(store.items.count) 条，约 \(ClipboardHistoryStore.formatByteCount(store.approximateTotalBytes))")
 
             Spacer(minLength: 8)
 
@@ -373,9 +407,9 @@ struct HistoryPanelView: View {
                 HStack(spacing: 5) {
                     ShortcutKeyCap(label: "⌘V")
                     Text("纯文本")
-                        .font(.caption.weight(.medium))
+                        .font(.caption.weight(.semibold))
                 }
-                .padding(.horizontal, 4)
+                .padding(.horizontal, 2)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -393,9 +427,9 @@ struct HistoryPanelView: View {
                 HStack(spacing: 5) {
                     ShortcutKeyCap(label: "↩")
                     Text("粘贴原文")
-                        .font(.caption.weight(.medium))
+                        .font(.caption.weight(.semibold))
                 }
-                .padding(.horizontal, 4)
+                .padding(.horizontal, 2)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
@@ -417,12 +451,12 @@ private struct HistoryRow: View {
     var body: some View {
         HStack(alignment: .center, spacing: HisCopyStyle.contentSpacing) {
             leadingVisual
-                .scaleEffect(isSelected ? 1.04 : 1)
+                .scaleEffect(isSelected ? HisCopyStyle.selectionScale : 1)
                 .animation(HisCopyStyle.selection, value: isSelected)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(item.textPreview)
-                    .font(.body)
+                    .font(.callout.weight(isSelected ? .semibold : .medium))
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                     .truncationMode(.tail)
@@ -430,19 +464,28 @@ private struct HistoryRow: View {
 
                 HStack(spacing: 6) {
                     Text(item.kindLabel)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                        .padding(.horizontal, 5)
                         .padding(.vertical, 1)
                         .background(
                             Capsule(style: .continuous)
-                                .fill(Color.primary.opacity(0.07))
+                                .fill(isSelected
+                                      ? Color.accentColor.opacity(0.14)
+                                      : Color.primary.opacity(0.06))
                         )
 
                     Text(HisCopyStyle.relativeTimeString(item.date))
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.tertiary)
                         .monospacedDigit()
+
+                    if item.isFavorite {
+                        Image(systemName: "star.fill")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(Color.yellow.opacity(0.95))
+                            .accessibilityHidden(true)
+                    }
                 }
             }
 
@@ -464,16 +507,25 @@ private struct HistoryRow: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
+    /// Trailing star: always reserves space; fades in on hover/selection; solid when favorited.
     private var favoriteButton: some View {
         Button {
-            store.toggleFavorite(id: item.id)
+            withAnimation(HisCopyStyle.selection) {
+                store.toggleFavorite(id: item.id)
+            }
         } label: {
             Image(systemName: item.isFavorite ? "star.fill" : "star")
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(item.isFavorite ? Color.yellow : Color.secondary)
-                .opacity(item.isFavorite || isHovered || isSelected ? 1 : 0.28)
-                .frame(width: 22, height: 22)
-                .contentShape(Rectangle())
+                .opacity(item.isFavorite || isHovered || isSelected ? 1 : 0)
+                .frame(width: 24, height: 24)
+                .background(
+                    Circle()
+                        .fill(item.isFavorite
+                              ? Color.yellow.opacity(0.14)
+                              : (isHovered || isSelected ? Color.primary.opacity(0.05) : Color.clear))
+                )
+                .contentShape(Circle())
         }
         .buttonStyle(.borderless)
         .help(item.isFavorite ? "取消收藏" : "收藏（免于按容量/时间自动清理）")
@@ -484,9 +536,9 @@ private struct HistoryRow: View {
     private var leadingVisual: some View {
         if item.kind == .image, let name = item.imageFileName,
            let image = store.loadImage(named: name) {
-            ThumbnailImage(image: image)
+            ThumbnailImage(image: image, isSelected: isSelected)
         } else {
-            SymbolWell(systemName: item.symbolName)
+            SymbolWell(systemName: item.symbolName, isSelected: isSelected)
         }
     }
 }
