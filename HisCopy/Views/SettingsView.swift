@@ -6,6 +6,28 @@ struct SettingsView: View {
     @ObservedObject private var store = ClipboardHistoryStore.shared
     @ObservedObject private var pasteController = PasteController.shared
 
+    /// Always in-range for the current unit — Stepper crashes if value ∉ `in:`.
+    private var retentionAgeRange: ClosedRange<Int> {
+        store.retentionAgeUnit.minValue...store.retentionAgeUnit.maxValue
+    }
+
+    private var retentionAgeValueBinding: Binding<Int> {
+        Binding(
+            get: {
+                let range = retentionAgeRange
+                return min(max(store.retentionAgeValue, range.lowerBound), range.upperBound)
+            },
+            set: { store.retentionAgeValue = $0 }
+        )
+    }
+
+    private var retentionAgeUnitBinding: Binding<RetentionAgeUnit> {
+        Binding(
+            get: { store.retentionAgeUnit },
+            set: { store.setRetentionAgeUnit($0) }
+        )
+    }
+
     var body: some View {
         Form {
             Section {
@@ -26,7 +48,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("保留时长")
                     HStack(spacing: 12) {
-                        Picker("单位", selection: $store.retentionAgeUnit) {
+                        Picker("单位", selection: retentionAgeUnitBinding) {
                             ForEach(RetentionAgeUnit.allCases) { unit in
                                 Text(unit.label).tag(unit)
                             }
@@ -35,9 +57,8 @@ struct SettingsView: View {
                         .labelsHidden()
                         .frame(maxWidth: 200)
 
-                        Stepper(value: $store.retentionAgeValue,
-                                in: store.retentionAgeUnit.minValue...store.retentionAgeUnit.maxValue) {
-                            Text("\(store.retentionAgeValue) \(store.retentionAgeUnit.label)")
+                        Stepper(value: retentionAgeValueBinding, in: retentionAgeRange) {
+                            Text("\(retentionAgeValueBinding.wrappedValue) \(store.retentionAgeUnit.label)")
                                 .monospacedDigit()
                                 .frame(minWidth: 72, alignment: .leading)
                         }
@@ -111,6 +132,8 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 520, height: 620)
         .onAppear {
+            // Normalize before first paint so Stepper `in:` always contains value.
+            store.setRetentionAgeUnit(store.retentionAgeUnit)
             pasteController.refreshAccessibilityStatus()
         }
     }
