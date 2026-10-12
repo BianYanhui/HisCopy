@@ -25,6 +25,18 @@ struct SettingsView: View {
             }
 
             Section {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("呼出/隐藏历史")
+                        .font(.body)
+                    HotKeyRecorderView()
+                }
+            } header: {
+                Text("全局快捷键")
+            } footer: {
+                Text("默认 ⇧⌘V（Shift+Command+V）。使用系统 Carbon RegisterEventHotKey，改后立即生效并写入偏好设置。仅打开面板，通常无需辅助功能（Accessibility）权限；模拟 ⌘V 粘贴才需要，本应用不模拟粘贴。")
+            }
+
+            Section {
                 // 占位：暂不真正注册 SMAppService
                 Toggle("开机时启动 HisCopy", isOn: $launchAtLogin)
             } header: {
@@ -51,7 +63,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460, height: 380)
+        .frame(width: 480, height: 460)
     }
 }
 
