@@ -4,15 +4,11 @@ import Combine
 
 /// Open/close hotkey.
 ///
-/// v0.8.5 — root cause (user hotkey.log on 0.8.4):
-/// `PanelPasteHotKeys` registered **⌘V** while the open hotkey **⇧⌘V** stayed
-/// registered (same key code). That coexistence permanently broke Carbon
-/// delivery: after close, `RegisterEventHotKey` still returned OK but Pressed
-/// never fired. Global monitors need Accessibility, so AX-off users had no path.
-///
-/// Fix: paste Carbon is Return-only; open hotkey is registered once and never
-/// Unregister'd on panel close (MASShortcut-style). `reregister()` only refreshes
-/// monitors/CGEvent. `suspend`/`resume` remain as safety if paste ever needs ⌘V.
+/// v0.8.6 — v0.8.5 removed paste ⌘V but Carbon still died after the first
+/// docked `makeKeyAndOrderFront` (user log: FIRE once, then silence with
+/// `hasRef=true`). Pulse never makes its panel key. We never call makeKey;
+/// on every panel close we `forceRecoverCarbon` (Unregister+Register once)
+/// *after* the berth has resigned key. Heartbeat logs ref state every 2s.
 @MainActor
 final class GlobalHotKeyManager: ObservableObject {
     static let shared = GlobalHotKeyManager()
@@ -39,6 +35,8 @@ final class GlobalHotKeyManager: ObservableObject {
     private var axObserver: NSObjectProtocol?
     /// Open hotkey temporarily off so paste can own ⌘V / Return via Carbon.
     private var suspendedForPanel = false
+    private var heartbeatTimer: Timer?
+    private var lastCarbonFireAt: Date?
 
     private init() {
         let defaults = UserDefaults.standard
@@ -60,6 +58,7 @@ final class GlobalHotKeyManager: ObservableObject {
         registerCarbonIfNeeded(reason: "start")
         installEventMonitors()
         installEventTapIfPossible()
+        startHeartbeat()
         axObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
@@ -79,6 +78,7 @@ final class GlobalHotKeyManager: ObservableObject {
             self.axObserver = nil
         }
         lastHandledAt = nil
+        stopHeartbeat()
     }
 
     func updateShortcut(_ newValue: HotKeyShortcut) {
@@ -193,7 +193,49 @@ final class GlobalHotKeyManager: ObservableObject {
 
     fileprivate func handleCarbonPressed(id: EventHotKeyID) {
         guard id.signature == Self.signature, id.id == Self.hotKeyID else { return }
+        lastCarbonFireAt = Date()
         handleChord(source: "carbon")
+    }
+
+    /// Unregister+Register once after the panel has resigned key. The live
+    /// `EventHotKeyRef` can look valid (`hasRef=true`) while the window server
+    /// no longer delivers Pressed — that was the v0.8.5 post-makeKey failure.
+    func forceRecoverCarbon(reason: String) {
+        HotKeyTrace.line(
+            "carbon FORCE RECOVER reason=\(reason) wasRef=\(hotKeyRef != nil) suspended=\(suspendedForPanel) keyWin=\(NSApp.keyWindow?.title ?? "nil")"
+        )
+        guard !suspendedForPanel else {
+            HotKeyTrace.line("carbon FORCE RECOVER skipped (suspended)")
+            return
+        }
+        unregisterCarbon(reason: "force-recover:\(reason)")
+        registerCarbonIfNeeded(reason: "force-recover:\(reason)")
+    }
+
+    private func startHeartbeat() {
+        stopHeartbeat()
+        let timer = Timer(timeInterval: 2.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.heartbeat() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        heartbeatTimer = timer
+    }
+
+    private func stopHeartbeat() {
+        heartbeatTimer?.invalidate()
+        heartbeatTimer = nil
+    }
+
+    private func heartbeat() {
+        let ago: String
+        if let last = lastCarbonFireAt {
+            ago = String(format: "%.1fs", Date().timeIntervalSince(last))
+        } else {
+            ago = "never"
+        }
+        HotKeyTrace.line(
+            "heartbeat hasRef=\(hotKeyRef != nil) suspended=\(suspendedForPanel) lastCarbonFire=\(ago) keyWin=\(NSApp.keyWindow?.title ?? "nil") active=\(NSApp.isActive)"
+        )
     }
 
     private func registerCarbonIfNeeded(reason: String) {
