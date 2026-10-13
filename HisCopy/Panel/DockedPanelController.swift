@@ -172,29 +172,40 @@ final class DockedPanelController {
     // MARK: - Hotkey / dismiss
 
     /// ⇧⌘V in docked mode: pop out from the dock (or retract if already open).
+    ///
+    /// "Showing" means the berth is on screen *and* sprung open — not merely
+    /// `state == .open` (that lied after paste/orderOut) and not a mid-close
+    /// spring with `isOpen == false`.
     func toggleFromHotKey() {
-        // Heal: state said `.open` but the berth was ordered out (paste / settle
-        // race). Treating that as still-open would only call `retract()` (a no-op
-        // visually) and leave the next presses looking dead.
-        if state == .open, window?.isVisible != true {
-            tearDownDismissMonitors?()
-            PanelPasteShortcutGate.shared.reset()
-            state = .collapsed
-            outsideSince = nil
-            hoverSince = nil
-            transitionToken += 1
-            var t = Transaction()
-            t.disablesAnimations = true
-            withTransaction(t) { model.isOpen = false }
-        }
-
-        if state == .open {
+        let showing = isBerthShowing
+        NSLog("[HisCopy] docked toggleFromHotKey showing=%@ state=%@ visible=%@ isOpen=%@",
+              showing ? "YES" : "NO",
+              String(describing: state),
+              (window?.isVisible == true) ? "YES" : "NO",
+              model.isOpen ? "YES" : "NO")
+        if showing {
             retract()
         } else {
+            // Heal any half-closed bookkeeping before opening.
+            if state != .collapsed || model.isOpen {
+                tearDownDismissMonitors?()
+                PanelPasteShortcutGate.shared.reset()
+                state = .collapsed
+                outsideSince = nil
+                hoverSince = nil
+                transitionToken += 1
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) { model.isOpen = false }
+            }
             open(fromHotKey: true)
         }
-        // Berth keying often drops Carbon HotKeyReleased; unlock the next press.
-        GlobalHotKeyManager.shared.clearPressSuppressionIfChordReleased()
+    }
+
+    /// Berth is visible and expanded (user can see the list).
+    private var isBerthShowing: Bool {
+        guard let window, window.isVisible, window.alphaValue > 0.05 else { return false }
+        return model.isOpen && state != .collapsed
     }
 
     /// Order the berth window in (collapsed) and spring it open on the next tick,
@@ -212,7 +223,6 @@ final class DockedPanelController {
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.state != .collapsed else { return }
                 withAnimation(Self.berthSpring) { self.model.isOpen = true }
-                GlobalHotKeyManager.shared.clearPressSuppressionIfChordReleased()
             }
         } else {
             withAnimation(Self.berthSpring) { model.isOpen = true }
@@ -282,7 +292,8 @@ final class DockedPanelController {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.closeSettle) { [weak self] in
             guard let self, self.transitionToken == token, self.state == .collapsed else { return }
             self.window?.orderOut(nil)
-            GlobalHotKeyManager.shared.clearPressSuppressionIfChordReleased()
+            // After the berth has resigned key — re-bind Carbon hotkey.
+            GlobalHotKeyManager.shared.reregister()
         }
     }
 
@@ -303,7 +314,9 @@ final class DockedPanelController {
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) { model.isOpen = false }
-        GlobalHotKeyManager.shared.clearPressSuppressionIfChordReleased()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            GlobalHotKeyManager.shared.reregister()
+        }
     }
 
     // MARK: - Pointer sampling (Pulse PanelPointerWatcher)

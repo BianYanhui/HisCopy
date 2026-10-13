@@ -240,7 +240,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DockedPanelController.shared.toggleFromHotKey()
             return
         }
-        if let window = historyWindow, window.isVisible {
+        let visible = historyWindow?.isVisible == true
+        NSLog("[HisCopy] undocked toggle visible=%@", visible ? "YES" : "NO")
+        if visible {
             hideHistoryPanel()
             return
         }
@@ -265,6 +267,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 粘贴路径必须立刻收起，避免焦点交还竞态；Esc/热键/点外部可短 fade。
         guard animated, window.isVisible else {
             finish()
+            GlobalHotKeyManager.shared.reregister()
             return
         }
         NSAnimationContext.runAnimationGroup({ ctx in
@@ -273,7 +276,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.animator().alphaValue = 0
         }, completionHandler: {
             finish()
-            GlobalHotKeyManager.shared.clearPressSuppressionIfChordReleased()
+            GlobalHotKeyManager.shared.reregister()
         })
     }
 
@@ -349,7 +352,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let content = window.contentView {
                 _ = window.makeFirstResponder(content)
             }
-            GlobalHotKeyManager.shared.clearPressSuppressionIfChordReleased()
         }
     }
 

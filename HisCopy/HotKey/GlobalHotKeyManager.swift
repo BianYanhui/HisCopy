@@ -1,18 +1,23 @@
 import AppKit
 import Carbon
 import Combine
+import os.log
 
-/// 使用 Carbon `RegisterEventHotKey` 注册全局热键（零第三方依赖，思路接近 Maccy）。
-/// 仅用于呼出/隐藏面板；模拟 ⌘V 粘贴由 PasteController 负责（需要辅助功能权限）。
+private let hotKeyLog = Logger(subsystem: "com.bianyanhui.HisCopy", category: "HotKey")
+
+/// Global open/close hotkey via Carbon `RegisterEventHotKey`.
 ///
-/// 只在 **keyDown（kEventHotKeyPressed）** 时 toggle；**忽略 keyUp（kEventHotKeyReleased）** 上的 toggle。
-/// 同一次物理按下若系统重复投递 Pressed，在和弦松开前会被抑制，避免「松手又关面板」。
+/// v0.8.3 — why v0.8.2 still failed:
+/// The ignore-until-Released / chord-poll gate was not the live failure mode.
+/// After the docked berth calls `makeKeyAndOrderFront`, subsequent hotkey
+/// `Pressed` events often never reach a handler installed on
+/// `GetApplicationEventTarget()` (menu-bar / nonactivating-panel quirk).
+/// Clearing `ignorePressedUntilChordRelease` then did nothing: there was no
+/// Pressed to unblock. Pulse registers on `GetEventDispatcherTarget()` and
+/// fires on every Pressed with no Released gate — that is what we do now.
 ///
-/// v0.8.2: `kEventHotKeyReleased` is not reliable after a `.nonactivatingPanel`
-/// becomes key (especially the v0.8.1 dual-window docked berth). If that event
-/// is dropped, `ignorePressedUntilChordRelease` stayed true forever and every
-/// later ⇧⌘V was discarded. Clear the flag by polling the real key state too
-/// (same approach as `PanelPasteShortcutGate`), with a hard timeout.
+/// Duplicate Pressed (menu keyEquivalent races, sticky keys) is filtered with
+/// a 300ms timestamp debounce, not a Released latch.
 @MainActor
 final class GlobalHotKeyManager: ObservableObject {
     static let shared = GlobalHotKeyManager()
@@ -21,8 +26,8 @@ final class GlobalHotKeyManager: ObservableObject {
     private static let hotKeyID: UInt32 = 1
     private static let defaultsKeyCode = "globalHotKeyKeyCode"
     private static let defaultsModifiers = "globalHotKeyCarbonModifiers"
-    private static let chordPollInterval: TimeInterval = 0.05
-    private static let forceClearAfter: TimeInterval = 1.5
+    /// Ignore a second Pressed this soon after a handled one (not a Released latch).
+    private static let debounceInterval: TimeInterval = 0.30
 
     @Published private(set) var shortcut: HotKeyShortcut
     /// 非空表示当前快捷键未能注册（多为冲突）。
@@ -33,10 +38,7 @@ final class GlobalHotKeyManager: ObservableObject {
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
     private var eventHandlerInstalled = false
-    /// 已处理过一次 Pressed，和弦尚未松开：忽略重复 Pressed，Released/poll 只清旗标。
-    private var ignorePressedUntilChordRelease = false
-    private var chordPollWorkItem: DispatchWorkItem?
-    private var suppressionStartedAt: Date?
+    private var lastHandledPressedAt: Date?
 
     private init() {
         let defaults = UserDefaults.standard
@@ -57,7 +59,7 @@ final class GlobalHotKeyManager: ObservableObject {
 
     func stop() {
         unregister()
-        clearPressSuppression()
+        lastHandledPressedAt = nil
     }
 
     /// Update shortcut、写入 UserDefaults，并立即重新注册。
@@ -71,15 +73,10 @@ final class GlobalHotKeyManager: ObservableObject {
         updateShortcut(.default)
     }
 
-    /// Call after a panel open/close that may have eaten `kEventHotKeyReleased`
-    /// (docked berth key transition). Safe: only clears when the chord is up.
-    func clearPressSuppressionIfChordReleased() {
-        guard ignorePressedUntilChordRelease else { return }
-        if isShortcutChordFullyReleased() {
-            clearPressSuppression()
-        } else {
-            scheduleChordPoll()
-        }
+    /// Re-bind with the window server after panel open/close. Heals a dead
+    /// `EventHotKeyRef` if macOS dropped it when the nonactivating berth keyed.
+    func reregister() {
+        registerCurrentShortcut()
     }
 
     private func persist(_ value: HotKeyShortcut) {
@@ -91,20 +88,18 @@ final class GlobalHotKeyManager: ObservableObject {
     private func installEventHandlerIfNeeded() {
         guard !eventHandlerInstalled else { return }
 
-        // 同时监听 Pressed / Released：Released 只用于清除抑制旗标，绝不 toggle。
+        // Pressed only — same as Pulse. No Released latch.
         var specs = [
             EventTypeSpec(
                 eventClass: OSType(kEventClassKeyboard),
                 eventKind: UInt32(kEventHotKeyPressed)
             ),
-            EventTypeSpec(
-                eventClass: OSType(kEventClassKeyboard),
-                eventKind: UInt32(kEventHotKeyReleased)
-            ),
         ]
         let userData = Unmanaged.passUnretained(self).toOpaque()
+        // GetEventDispatcherTarget — Pulse / reliable for accessory + nonactivating panels.
+        // GetApplicationEventTarget stopped receiving Pressed after the berth became key.
         let status = InstallEventHandler(
-            GetApplicationEventTarget(),
+            GetEventDispatcherTarget(),
             hotKeyEventCallback,
             Int(specs.count),
             &specs,
@@ -115,78 +110,27 @@ final class GlobalHotKeyManager: ObservableObject {
             eventHandlerInstalled = true
         } else {
             registrationFailureMessage = "无法安装全局热键事件处理（错误码 \(status)）。"
+            hotKeyLog.error("InstallEventHandler failed: \(status, privacy: .public)")
         }
     }
 
     fileprivate func handleCarbonHotKey(kind: UInt32, id: EventHotKeyID) {
         guard id.signature == Self.signature, id.id == Self.hotKeyID else { return }
-
-        if kind == UInt32(kEventHotKeyReleased) {
-            // keyUp：绝不 toggle，只允许下一次真正的 keyDown。
-            clearPressSuppression()
-            return
-        }
-
         guard kind == UInt32(kEventHotKeyPressed) else { return }
 
-        // 同一次按住期间的重复 Pressed（或与菜单 keyEquivalent 竞态）直接丢弃。
-        if ignorePressedUntilChordRelease { return }
-
-        ignorePressedUntilChordRelease = true
-        suppressionStartedAt = Date()
+        let now = Date()
+        if let last = lastHandledPressedAt, now.timeIntervalSince(last) < Self.debounceInterval {
+            hotKeyLog.debug("Pressed debounced (\(now.timeIntervalSince(last), format: .fixed(precision: 3))s)")
+            return
+        }
+        lastHandledPressedAt = now
+        hotKeyLog.info("Pressed → toggle (\(self.shortcut.displayString, privacy: .public))")
         onHotKeyPressed?()
-        // Don't rely solely on Released — docked panel keying often drops it.
-        scheduleChordPoll()
-    }
-
-    private func scheduleChordPoll() {
-        chordPollWorkItem?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.pollChordRelease()
-        }
-        chordPollWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.chordPollInterval, execute: work)
-    }
-
-    private func pollChordRelease() {
-        guard ignorePressedUntilChordRelease else {
-            chordPollWorkItem = nil
-            return
-        }
-        if isShortcutChordFullyReleased() {
-            clearPressSuppression()
-            return
-        }
-        if let started = suppressionStartedAt,
-           Date().timeIntervalSince(started) >= Self.forceClearAfter {
-            clearPressSuppression()
-            return
-        }
-        scheduleChordPoll()
-    }
-
-    private func clearPressSuppression() {
-        ignorePressedUntilChordRelease = false
-        suppressionStartedAt = nil
-        chordPollWorkItem?.cancel()
-        chordPollWorkItem = nil
-    }
-
-    /// True when no modifier from the registered chord is held and the key is up.
-    private func isShortcutChordFullyReleased() -> Bool {
-        let mods = NSEvent.modifierFlags.intersection([.command, .shift, .option, .control])
-        if !mods.isEmpty { return false }
-        if CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(shortcut.keyCode)) {
-            return false
-        }
-        return true
     }
 
     private func registerCurrentShortcut() {
         unregister()
         registrationFailureMessage = nil
-        clearPressSuppression()
 
         guard shortcut.isValid else {
             registrationFailureMessage = "快捷键无效：请至少包含一个修饰键（⌘ / ⌥ / ⌃ / ⇧）。"
@@ -199,7 +143,7 @@ final class GlobalHotKeyManager: ObservableObject {
             shortcut.keyCode,
             shortcut.carbonModifiers,
             hotKeyID,
-            GetApplicationEventTarget(),
+            GetEventDispatcherTarget(),
             0,
             &ref
         )
@@ -207,11 +151,13 @@ final class GlobalHotKeyManager: ObservableObject {
         if status == noErr, let ref {
             hotKeyRef = ref
             registrationFailureMessage = nil
+            hotKeyLog.info("Registered \(self.shortcut.displayString, privacy: .public)")
         } else {
             hotKeyRef = nil
             let name = shortcut.displayString
             registrationFailureMessage =
                 "快捷键 \(name) 注册失败（可能与其他应用冲突，错误码 \(status)）。请在设置中更换。"
+            hotKeyLog.error("RegisterEventHotKey failed: \(status, privacy: .public)")
         }
     }
 
@@ -223,7 +169,8 @@ final class GlobalHotKeyManager: ObservableObject {
     }
 }
 
-/// Carbon C 回调：必须是全局 `@convention(c)` 函数，不能捕获上下文。
+/// Carbon C callback. The dispatcher target invokes this on the main run loop
+/// (same assumption Pulse makes) — call the actor directly, no `Task` hop.
 private func hotKeyEventCallback(
     nextHandler: EventHandlerCallRef?,
     theEvent: EventRef?,
@@ -250,7 +197,7 @@ private func hotKeyEventCallback(
     }
 
     let manager = Unmanaged<GlobalHotKeyManager>.fromOpaque(userData).takeUnretainedValue()
-    Task { @MainActor in
+    MainActor.assumeIsolated {
         manager.handleCarbonHotKey(kind: kind, id: hotKeyID)
     }
     return noErr
