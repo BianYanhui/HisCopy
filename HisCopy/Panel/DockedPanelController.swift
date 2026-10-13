@@ -180,9 +180,7 @@ final class DockedPanelController {
     /// spring with `isOpen == false`.
     func toggleFromHotKey() {
         let showing = isBerthShowing
-        HotKeyTrace.line(
-            "docked toggle showing=\(showing) state=\(state) visible=\(window?.isVisible == true) isOpen=\(model.isOpen)"
-        )
+        HotKeyTrace.line("docked toggle showing=\(showing)")
         if showing {
             retract()
         } else {
@@ -239,15 +237,10 @@ final class DockedPanelController {
         state = .open
         outsideSince = nil
         showBerth()
-        // v0.8.6: Pulse never makes the panel key (`canBecomeKey` false there;
-        // we keep canBecomeKey true so a *click* can focus search, but we must
-        // NEVER call makeKeyAndOrderFront — that alone kills Carbon Pressed
-        // delivery until process restart / force-recover after resign).
+        // Pulse-style: never makeKey — DockedHistoryPanel.canBecomeKey is false.
         if fromHotKey {
             window.orderFrontRegardless()
-            HotKeyTrace.line(
-                "docked open fromHotKey NO makeKey keyWin=\(NSApp.keyWindow?.title ?? "nil") frame=\(NSStringFromRect(window.frame))"
-            )
+            HotKeyTrace.line("docked open (no makeKey)")
         }
         installDismissMonitors?()
         if wasCollapsed {
@@ -293,7 +286,7 @@ final class DockedPanelController {
         withAnimation(Self.berthSpring) { model.isOpen = false }
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.closeSettle) { [weak self] in
             guard let self, self.transitionToken == token, self.state == .collapsed else { return }
-            self.finishCloseAndRecoverHotKey()
+            self.finishClose()
         }
     }
 
@@ -314,32 +307,16 @@ final class DockedPanelController {
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) { model.isOpen = false }
-        // Paste path ordered out already — recover Carbon after resign.
-        DispatchQueue.main.async {
-            self.finishCloseAndRecoverHotKey(alreadyOrderedOut: true)
-        }
+        DispatchQueue.main.async { self.finishClose(alreadyOrderedOut: true) }
     }
 
-    /// Order the berth out, ensure it is not key, then force-recover Carbon.
-    private func finishCloseAndRecoverHotKey(alreadyOrderedOut: Bool = false) {
-        guard let window else {
-            GlobalHotKeyManager.shared.forceRecoverCarbon(reason: "docked-close-nil-window")
-            return
-        }
-        if !alreadyOrderedOut {
-            window.orderOut(nil)
-        }
+    private func finishClose(alreadyOrderedOut: Bool = false) {
+        guard let window else { return }
+        if !alreadyOrderedOut { window.orderOut(nil) }
         window.alphaValue = 1
-        // If an invisible/animating window still holds key, Carbon stays dead.
         if window.isKeyWindow || NSApp.keyWindow === window {
-            HotKeyTrace.line("docked close: berth still key — ordering out again")
             window.orderOut(nil)
         }
-        HotKeyTrace.line(
-            "docked close done keyWin=\(NSApp.keyWindow?.title ?? "nil") active=\(NSApp.isActive) berthVisible=\(window.isVisible)"
-        )
-        GlobalHotKeyManager.shared.forceRecoverCarbon(reason: "docked-close")
-        GlobalHotKeyManager.shared.reregister()
     }
 
     // MARK: - Pointer sampling (Pulse PanelPointerWatcher)
