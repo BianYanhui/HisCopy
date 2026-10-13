@@ -57,6 +57,8 @@ final class PanelPasteShortcutGate: ObservableObject {
         isArmed = true
         armingStartedAt = nil
         PanelPasteHotKeys.shared.stop()
+        // Ensure open hotkey is live if a prior build left it suspended.
+        GlobalHotKeyManager.shared.resumeOpenHotKeyAfterPanelSession()
     }
 
     // MARK: - Private

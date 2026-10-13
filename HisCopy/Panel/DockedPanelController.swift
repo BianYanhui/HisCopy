@@ -237,14 +237,13 @@ final class DockedPanelController {
         state = .open
         outsideSince = nil
         showBerth()
-        // v0.8.4: Pulse keeps canBecomeKey false and only orderFrontRegardless.
-        // makeKeyAndOrderFront after the first open was correlated with Carbon
-        // Pressed going silent. Expand without taking key; arrows / ⌘V / Return /
-        // 1–9 use monitors + temporary Carbon paste hotkeys. Clicking the list
-        // or search still makes the panel key (canBecomeKey remains true).
+        // v0.8.5: makeKey is safe again — we no longer RegisterEventHotKey ⌘V
+        // beside ⇧⌘V (that coexistence killed Carbon). Key is needed so the
+        // local monitor can handle ⌘V paste without Accessibility.
         if fromHotKey {
-            window.orderFrontRegardless()
-            HotKeyTrace.line("docked open fromHotKey (no makeKey) frame=\(NSStringFromRect(window.frame))")
+            window.makeKeyAndOrderFront(nil)
+            if let content = window.contentView { _ = window.makeFirstResponder(content) }
+            HotKeyTrace.line("docked open fromHotKey makeKey frame=\(NSStringFromRect(window.frame))")
         }
         installDismissMonitors?()
         if wasCollapsed {

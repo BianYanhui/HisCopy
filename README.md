@@ -1,9 +1,10 @@
 # HisCopy
 
-菜单栏剪贴板历史工具（macOS）。**v0.8.4** 热键三通道回退；**v0.8.3** 热键可靠反复开关；**v0.8.2** 热键可反复开关；**v0.8.1** 细节打磨；**v0.8.0** 屏幕边缘吸附 + 改用 Pulse 视觉风格；**v0.7.2** 非激活面板 + 修正辅助功能误判；**v0.7.1** 修复历史面板打开后粘贴焦点被抢走；**v0.7.0** 全面打磨历史面板与设置，达到接近 Paste/Pulse 的成品级质感；**v0.6.1** 修复设置与方向键；**v0.6.0** 起支持可配置容量/时长保留与收藏；全局快捷键 ⇧⌘V 在屏幕正中呼出历史；选中后 **⌘V** 粘贴纯文本、**回车** 粘贴有格式原文；以及本地历史与 GitHub Releases 应用内更新。
+菜单栏剪贴板历史工具（macOS）。**v0.8.5** Carbon 热键与粘贴热键互斥恢复；**v0.8.4** 热键三通道回退；**v0.8.3** 热键可靠反复开关；**v0.8.2** 热键可反复开关；**v0.8.1** 细节打磨；**v0.8.0** 屏幕边缘吸附 + 改用 Pulse 视觉风格；**v0.7.2** 非激活面板 + 修正辅助功能误判；**v0.7.1** 修复历史面板打开后粘贴焦点被抢走；**v0.7.0** 全面打磨历史面板与设置，达到接近 Paste/Pulse 的成品级质感；**v0.6.1** 修复设置与方向键；**v0.6.0** 起支持可配置容量/时长保留与收藏；全局快捷键 ⇧⌘V 在屏幕正中呼出历史；选中后 **⌘V** 粘贴纯文本、**回车** 粘贴有格式原文；以及本地历史与 GitHub Releases 应用内更新。
 
 ## 功能
 
+- **Carbon 热键复活**（v0.8.5）：根因是面板打开时 `PanelPasteHotKeys` 注册的 ⌘V 与打开热键 ⇧⌘V 同键码并存，毁掉 Carbon；此后 reregister 显示 OK 但 Pressed 永不再来。改为粘贴侧只 Carbon 注册 Return，⌘V 走本地监听；打开热键注册一次保持到改快捷键为止
 - **热键三通道回退**（v0.8.4）：Carbon + 本地/全局 NSEvent 监听 +（辅助功能授权后）CGEvent session tap；吸附热键打开不再 makeKey（对齐 Pulse）；诊断写入 `~/Library/Logs/HisCopy/hotkey.log`
 - **热键 GetEventDispatcherTarget**（v0.8.3）：根因是 Carbon 热键挂在 `GetApplicationEventTarget`，吸附面板成为 key 后后续 Pressed 不再送达；改为与 Pulse 相同的 `GetEventDispatcherTarget`，去掉 Released 闩锁，改用 300ms 时间戳防抖，关闭后面重新注册。v0.8.2 的「清抑制旗标」治标未治本
 - **热键清旗标尝试**（v0.8.2）：修复吸附面板首次 ⇧⌘V 后再次热键无响应。根因是 Carbon `kEventHotKeyReleased` 在 nonactivating 面板成为 key 后常丢失，抑制旗标卡住；改为轮询真实按键状态清旗标，并在开关面板后自愈
@@ -69,8 +70,8 @@
 合并到 `main` 后打 tag 触发 CI 构建并创建 Release：
 
 ```bash
-git tag v0.8.4
-git push origin v0.8.4
+git tag v0.8.5
+git push origin v0.8.5
 ```
 
 ## License
