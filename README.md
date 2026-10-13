@@ -1,9 +1,10 @@
 # HisCopy
 
-菜单栏剪贴板历史工具（macOS）。**v0.8.7** 热键路径清理（CGEvent 主路径）；**v0.8.6** 吸附面板永不 makeKey；**v0.8.5** Carbon 热键与粘贴热键互斥恢复；**v0.8.4** 热键三通道回退；**v0.8.3** 热键可靠反复开关；**v0.8.2** 热键可反复开关；**v0.8.1** 细节打磨；**v0.8.0** 屏幕边缘吸附 + 改用 Pulse 视觉风格；**v0.7.2** 非激活面板 + 修正辅助功能误判；**v0.7.1** 修复历史面板打开后粘贴焦点被抢走；**v0.7.0** 全面打磨历史面板与设置，达到接近 Paste/Pulse 的成品级质感；**v0.6.1** 修复设置与方向键；**v0.6.0** 起支持可配置容量/时长保留与收藏；全局快捷键 ⇧⌘V 在屏幕正中呼出历史；选中后 **⌘V** 粘贴纯文本、**回车** 粘贴有格式原文；以及本地历史与 GitHub Releases 应用内更新。
+菜单栏剪贴板历史工具（macOS）。**v0.8.8** 稳定代码签名（辅助功能跨更新保留）；**v0.8.7** 热键路径清理（CGEvent 主路径）；**v0.8.6** 吸附面板永不 makeKey；**v0.8.5** Carbon 热键与粘贴热键互斥恢复；**v0.8.4** 热键三通道回退；**v0.8.3** 热键可靠反复开关；**v0.8.2** 热键可反复开关；**v0.8.1** 细节打磨；**v0.8.0** 屏幕边缘吸附 + 改用 Pulse 视觉风格；**v0.7.2** 非激活面板 + 修正辅助功能误判；**v0.7.1** 修复历史面板打开后粘贴焦点被抢走；**v0.7.0** 全面打磨历史面板与设置，达到接近 Paste/Pulse 的成品级质感；**v0.6.1** 修复设置与方向键；**v0.6.0** 起支持可配置容量/时长保留与收藏；全局快捷键 ⇧⌘V 在屏幕正中呼出历史；选中后 **⌘V** 粘贴纯文本、**回车** 粘贴有格式原文；以及本地历史与 GitHub Releases 应用内更新。
 
 ## 功能
 
+- **稳定代码签名**（v0.8.8）：Release 使用持久自签证书 `HisCopy Self-Signed`（见 [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md)）。切换到此签名后需**一次性**重新授权辅助功能；之后更新一般无需再勾选。缺失 CI 密钥时回退 ad-hoc。
 - **热键架构清理**（v0.8.7）：全局快捷键以辅助功能下的 CGEvent tap 为主，NSEvent 监听为辅，Carbon 仅作备份；去掉心跳/强制恢复等调试残留；吸附仍不 makeKey
 - **吸附永不 makeKey**（v0.8.6）：v0.8.5 去掉粘贴 ⌘V 后 Carbon 仍在首次 makeKey 后死亡。对齐 Pulse：`DockedHistoryPanel.canBecomeKey = false`，只 `orderFrontRegardless`；关闭后 `forceRecoverCarbon`；2s heartbeat 写 hotkey.log
 - **Carbon 热键复活**（v0.8.5）：根因是面板打开时 `PanelPasteHotKeys` 注册的 ⌘V 与打开热键 ⇧⌘V 同键码并存，毁掉 Carbon；此后 reregister 显示 OK 但 Pressed 永不再来。改为粘贴侧只 Carbon 注册 Return，⌘V 走本地监听；打开热键注册一次保持到改快捷键为止
@@ -72,10 +73,19 @@
 合并到 `main` 后打 tag 触发 CI 构建并创建 Release：
 
 ```bash
-git tag v0.8.7
-git push origin v0.8.7
+git tag v0.8.8
+git push origin v0.8.8
 ```
 
 ## License
 
 MIT
+
+## 代码签名与辅助功能
+
+GitHub Actions Release 使用稳定自签身份 **`HisCopy Self-Signed`**（不是每次不同的 ad-hoc）。这样系统「辅助功能」可以在版本更新后继续认同一份应用。
+
+- 细节与轮换证书：[docs/CODE_SIGNING.md](docs/CODE_SIGNING.md)
+- **首次**换到本签名后：删除辅助功能列表里所有旧 HisCopy，再添加当前 `.app`，重启应用并「重新检查权限」。
+- 之后用本仓库 CI 打出的更新包，一般不必再勾选。
+

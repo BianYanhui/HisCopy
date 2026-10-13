@@ -18,6 +18,9 @@ jobs:
   build:
     name: Build HisCopy.app (macOS)
     runs-on: macos-15
+    env:
+      # Stable self-signed identity (see docs/CODE_SIGNING.md / README).
+      HISCOPY_SIGN_IDENTITY: "HisCopy Self-Signed"
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -41,14 +44,72 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             build 2>&1 | tee xcodebuild.log
 
-      - name: Ad-hoc sign and zip
+      - name: Import signing certificate
+        id: import_cert
+        env:
+          P12_BASE64: ${{ secrets.HISCOPY_SIGNING_CERTIFICATE_P12 }}
+          P12_PASSWORD: ${{ secrets.HISCOPY_SIGNING_CERTIFICATE_PASSWORD }}
         run: |
+          set -euo pipefail
+          if [ -z "${P12_BASE64:-}" ] || [ -z "${P12_PASSWORD:-}" ]; then
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "No signing secrets — will ad-hoc sign."
+            exit 0
+          fi
+
+          CERT_PATH="$RUNNER_TEMP/hiscopy-codesign.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/hiscopy-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+
+          echo "$P12_BASE64" | base64 --decode > "$CERT_PATH"
+
+          # Ephemeral keychain for this job only.
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" \
+            -P "$P12_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychain -d user | sed -e s/\"//g)
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Verify identity is visible to codesign.
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+          echo "Signing certificate imported."
+
+      - name: Sign and zip
+        env:
+          DID_IMPORT: ${{ steps.import_cert.outputs.signed }}
+        run: |
+          set -euo pipefail
           APP="build/Build/Products/Release/HisCopy.app"
           test -d "$APP"
-          # Ad-hoc signature (no certificate) so the app runs on Apple Silicon.
-          codesign --force --deep --sign - "$APP"
-          codesign --verify --verbose "$APP"
+
+          if [ "${DID_IMPORT}" = "true" ]; then
+            echo "=== Stable identity sign: $HISCOPY_SIGN_IDENTITY ==="
+            # Self-signed: omit --options runtime (hardened runtime needs proper
+            # Apple cert / entitlements). Deep sign keeps helper binaries aligned.
+            codesign --force --deep --sign "$HISCOPY_SIGN_IDENTITY" \
+              --timestamp=none \
+              "$APP"
+          else
+            echo "=== Ad-hoc sign (fallback) ==="
+            codesign --force --deep --sign - "$APP"
+          fi
+
+          echo "=== codesign -dv --verbose=4 ==="
+          codesign -dv --verbose=4 "$APP" 2>&1 | tee codesign-verify.txt
+          codesign --verify --verbose=4 "$APP"
           lipo -info "$APP/Contents/MacOS/HisCopy"
+
           ditto -c -k --sequesterRsrc --keepParent "$APP" HisCopy.zip
           ls -lh HisCopy.zip
 
@@ -57,9 +118,16 @@ jobs:
         with:
           name: HisCopy.zip
           path: HisCopy.zip
-          # Upload the zip as-is so the download is HisCopy.zip, not a zip in a zip.
           archive: false
           if-no-files-found: error
+
+      - name: Upload codesign log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: codesign-verify
+          path: codesign-verify.txt
+          if-no-files-found: ignore
 
       - name: Upload build log
         if: failure()
