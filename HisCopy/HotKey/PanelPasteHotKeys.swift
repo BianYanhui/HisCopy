@@ -1,20 +1,22 @@
 import AppKit
 import Carbon
 
-/// While the history panel is visible, register Carbon hotkeys for ⌘V and Return.
+/// While the history panel is visible, register a Carbon hotkey for **Return**
+/// so Enter pastes even when a `.nonactivatingPanel` is key and the destination
+/// app is still frontmost.
 ///
-/// A `.nonactivatingPanel` keeps the destination app frontmost; without a global
-/// grab those keys would go to the dialog (Return might submit it). Carbon hotkeys
-/// work system-wide and suppress delivery to the destination while registered.
+/// v0.8.5: **Do not** RegisterEventHotKey ⌘V here. The open shortcut defaults to
+/// ⇧⌘V (same key code). Registering ⌘V alongside ⇧⌘V corrupts the open-hotkey
+/// registration on current macOS — after the panel closes, Pressed never fires
+/// again (user hotkey.log on v0.8.4). ⌘V paste is handled by
+/// `PanelPasteShortcutGate`'s local monitor (panel is key while open).
 @MainActor
 final class PanelPasteHotKeys {
     static let shared = PanelPasteHotKeys()
 
     fileprivate static let signature: OSType = 0x4853_4351 // "HSCQ"
-    fileprivate static let idPastePlain: UInt32 = 10
     fileprivate static let idPasteFormatted: UInt32 = 11
 
-    private var plainRef: EventHotKeyRef?
     private var formattedRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
     private var handlerInstalled = false
@@ -26,6 +28,7 @@ final class PanelPasteHotKeys {
         installHandlerIfNeeded()
         register()
         enabled = false
+        HotKeyTrace.line("pasteCarbon start (Return only; no ⌘V)")
     }
 
     func setArmed(_ armed: Bool) {
@@ -35,17 +38,13 @@ final class PanelPasteHotKeys {
     func stop() {
         enabled = false
         unregister()
+        HotKeyTrace.line("pasteCarbon stop")
     }
 
     fileprivate func handleHotKey(id: EventHotKeyID) {
         guard enabled, id.signature == Self.signature else { return }
-        switch id.id {
-        case Self.idPastePlain:
-            NotificationCenter.default.post(name: .hisCopyPanelPastePlain, object: nil)
-        case Self.idPasteFormatted:
+        if id.id == Self.idPasteFormatted {
             NotificationCenter.default.post(name: .hisCopyPanelPasteFormatted, object: nil)
-        default:
-            break
         }
     }
 
@@ -72,18 +71,9 @@ final class PanelPasteHotKeys {
 
     private func register() {
         unregister()
-        var plainID = EventHotKeyID(signature: Self.signature, id: Self.idPastePlain)
         var formattedID = EventHotKeyID(signature: Self.signature, id: Self.idPasteFormatted)
-        var plain: EventHotKeyRef?
         var formatted: EventHotKeyRef?
-        RegisterEventHotKey(
-            UInt32(kVK_ANSI_V),
-            UInt32(cmdKey),
-            plainID,
-            GetEventDispatcherTarget(),
-            0,
-            &plain
-        )
+        // Return only — never ⌘V (conflicts with open hotkey ⇧⌘V).
         RegisterEventHotKey(
             UInt32(kVK_Return),
             0,
@@ -92,15 +82,10 @@ final class PanelPasteHotKeys {
             0,
             &formatted
         )
-        plainRef = plain
         formattedRef = formatted
     }
 
     private func unregister() {
-        if let plainRef {
-            UnregisterEventHotKey(plainRef)
-            self.plainRef = nil
-        }
         if let formattedRef {
             UnregisterEventHotKey(formattedRef)
             self.formattedRef = nil
@@ -128,7 +113,6 @@ private func panelPasteHotKeyCallback(
     )
     guard err == noErr else { return err }
     let obj = Unmanaged<PanelPasteHotKeys>.fromOpaque(userData).takeUnretainedValue()
-    // Carbon → main run loop; same as GlobalHotKeyManager / Pulse.
     MainActor.assumeIsolated {
         obj.handleHotKey(id: hotKeyID)
     }

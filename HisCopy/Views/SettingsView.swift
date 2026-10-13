@@ -107,7 +107,7 @@ struct SettingsView: View {
             } header: {
                 Label("粘贴", systemImage: "doc.on.clipboard.fill")
             } footer: {
-                Text("一键粘贴用 Accessibility / CGEvent 模拟 ⌘V。状态针对「当前正在运行的这份」HisCopy：ad-hoc 更新后系统列表里勾选的可能是旧二进制，会出现「设置里已开、这里仍显示未授权」。请删除列表中所有 HisCopy 后重新添加当前 .app，并重启应用。粘贴时仍会尝试发送 ⌘V，不因该指示灯而放弃。")
+                Text("一键粘贴用 Accessibility / CGEvent 模拟 ⌘V。状态针对「当前正在运行的这份」HisCopy：ad-hoc 更新后请删除列表中所有 HisCopy 再重新添加当前 .app。未授权时全局热键监听与 CGEvent 热键回退不可用，仅靠 Carbon；粘贴仍会尝试发送 ⌘V。")
             }
 
             Section {
@@ -149,7 +149,7 @@ struct SettingsView: View {
             } header: {
                 Label("全局快捷键", systemImage: "keyboard")
             } footer: {
-                Text("默认 ⇧⌘V。v0.8.4 起同时使用 Carbon + 全局/本地按键监听 +（已授权辅助功能时）CGEvent 监听，避免面板成为 key 后热键失效。粘贴模拟 ⌘V 仍需辅助功能。诊断：~/Library/Logs/HisCopy/hotkey.log")
+                Text("默认 ⇧⌘V。打开面板时会暂时让出 Carbon 给粘贴热键，关闭后立即恢复（勿与 ⌘V 同时注册）。无辅助功能时仅靠 Carbon，必须保持该恢复路径。全局监听/CGEvent 需辅助功能。诊断：~/Library/Logs/HisCopy/hotkey.log")
             }
 
             Section {
@@ -205,8 +205,10 @@ struct SettingsView: View {
         .onAppear {
             // Normalize before first paint so Stepper `in:` always contains value.
             store.setRetentionAgeUnit(store.retentionAgeUnit)
-            _ = pasteController.refreshAccessibilityStatus(prompt: false)
+            // Prompt once from Settings so CGEvent/global hotkey fallbacks can attach.
+            _ = pasteController.refreshAccessibilityStatus(prompt: !pasteController.isAccessibilityTrusted)
             launchAtLogin.refresh()
+            GlobalHotKeyManager.shared.reregister()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             launchAtLogin.refresh()
