@@ -57,7 +57,7 @@ final class PanelPasteHotKeys {
         )
         let userData = Unmanaged.passUnretained(self).toOpaque()
         let status = InstallEventHandler(
-            GetApplicationEventTarget(),
+            GetEventDispatcherTarget(),
             panelPasteHotKeyCallback,
             1,
             &spec,
@@ -80,7 +80,7 @@ final class PanelPasteHotKeys {
             UInt32(kVK_ANSI_V),
             UInt32(cmdKey),
             plainID,
-            GetApplicationEventTarget(),
+            GetEventDispatcherTarget(),
             0,
             &plain
         )
@@ -88,7 +88,7 @@ final class PanelPasteHotKeys {
             UInt32(kVK_Return),
             0,
             formattedID,
-            GetApplicationEventTarget(),
+            GetEventDispatcherTarget(),
             0,
             &formatted
         )
@@ -128,7 +128,8 @@ private func panelPasteHotKeyCallback(
     )
     guard err == noErr else { return err }
     let obj = Unmanaged<PanelPasteHotKeys>.fromOpaque(userData).takeUnretainedValue()
-    Task { @MainActor in
+    // Carbon → main run loop; same as GlobalHotKeyManager / Pulse.
+    MainActor.assumeIsolated {
         obj.handleHotKey(id: hotKeyID)
     }
     return noErr
