@@ -525,7 +525,7 @@ struct SliverDragHandle: NSViewRepresentable {
 
 /// Centered (不吸附) panel: click may become key for search. Do not call
 /// `makeKeyAndOrderFront` from code — that silences Carbon until force-recover.
-final class HistoryPanel: NSPanel {
+class HistoryPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 }
