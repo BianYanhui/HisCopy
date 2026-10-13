@@ -273,6 +273,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.animator().alphaValue = 0
         }, completionHandler: {
             finish()
+            GlobalHotKeyManager.shared.clearPressSuppressionIfChordReleased()
         })
     }
 
@@ -348,6 +349,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let content = window.contentView {
                 _ = window.makeFirstResponder(content)
             }
+            GlobalHotKeyManager.shared.clearPressSuppressionIfChordReleased()
         }
     }
 
