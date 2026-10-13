@@ -76,7 +76,9 @@ final class DockedPanelController {
     func install() {
         guard window == nil else { return }
         placement = DockPlacement.load()
-        let panel = HistoryPanel(
+        // DockedHistoryPanel: canBecomeKey false — Pulse-aligned; programmatic
+        // or click keying of HistoryPanel was silencing Carbon after first toggle.
+        let panel = DockedHistoryPanel(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 588),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -125,7 +127,7 @@ final class DockedPanelController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.worksWhenModal = true
         panel.hidesOnDeactivate = false
-        panel.becomesKeyOnlyIfNeeded = false
+        panel.becomesKeyOnlyIfNeeded = true
         panel.isMovable = false
     }
 
@@ -237,13 +239,15 @@ final class DockedPanelController {
         state = .open
         outsideSince = nil
         showBerth()
-        // v0.8.5: makeKey is safe again — we no longer RegisterEventHotKey ⌘V
-        // beside ⇧⌘V (that coexistence killed Carbon). Key is needed so the
-        // local monitor can handle ⌘V paste without Accessibility.
+        // v0.8.6: Pulse never makes the panel key (`canBecomeKey` false there;
+        // we keep canBecomeKey true so a *click* can focus search, but we must
+        // NEVER call makeKeyAndOrderFront — that alone kills Carbon Pressed
+        // delivery until process restart / force-recover after resign).
         if fromHotKey {
-            window.makeKeyAndOrderFront(nil)
-            if let content = window.contentView { _ = window.makeFirstResponder(content) }
-            HotKeyTrace.line("docked open fromHotKey makeKey frame=\(NSStringFromRect(window.frame))")
+            window.orderFrontRegardless()
+            HotKeyTrace.line(
+                "docked open fromHotKey NO makeKey keyWin=\(NSApp.keyWindow?.title ?? "nil") frame=\(NSStringFromRect(window.frame))"
+            )
         }
         installDismissMonitors?()
         if wasCollapsed {
@@ -289,9 +293,7 @@ final class DockedPanelController {
         withAnimation(Self.berthSpring) { model.isOpen = false }
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.closeSettle) { [weak self] in
             guard let self, self.transitionToken == token, self.state == .collapsed else { return }
-            self.window?.orderOut(nil)
-            // After the berth has resigned key — re-bind Carbon hotkey.
-            GlobalHotKeyManager.shared.reregister()
+            self.finishCloseAndRecoverHotKey()
         }
     }
 
@@ -312,9 +314,32 @@ final class DockedPanelController {
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) { model.isOpen = false }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            GlobalHotKeyManager.shared.reregister()
+        // Paste path ordered out already — recover Carbon after resign.
+        DispatchQueue.main.async {
+            self.finishCloseAndRecoverHotKey(alreadyOrderedOut: true)
         }
+    }
+
+    /// Order the berth out, ensure it is not key, then force-recover Carbon.
+    private func finishCloseAndRecoverHotKey(alreadyOrderedOut: Bool = false) {
+        guard let window else {
+            GlobalHotKeyManager.shared.forceRecoverCarbon(reason: "docked-close-nil-window")
+            return
+        }
+        if !alreadyOrderedOut {
+            window.orderOut(nil)
+        }
+        window.alphaValue = 1
+        // If an invisible/animating window still holds key, Carbon stays dead.
+        if window.isKeyWindow || NSApp.keyWindow === window {
+            HotKeyTrace.line("docked close: berth still key — ordering out again")
+            window.orderOut(nil)
+        }
+        HotKeyTrace.line(
+            "docked close done keyWin=\(NSApp.keyWindow?.title ?? "nil") active=\(NSApp.isActive) berthVisible=\(window.isVisible)"
+        )
+        GlobalHotKeyManager.shared.forceRecoverCarbon(reason: "docked-close")
+        GlobalHotKeyManager.shared.reregister()
     }
 
     // MARK: - Pointer sampling (Pulse PanelPointerWatcher)
@@ -498,11 +523,17 @@ struct SliverDragHandle: NSViewRepresentable {
     }
 }
 
-/// Nonactivating floating panel: can be key for search/arrows/paste shortcuts
-/// without activating HisCopy, so the original dialog keeps system focus.
+/// Centered (不吸附) panel: click may become key for search. Do not call
+/// `makeKeyAndOrderFront` from code — that silences Carbon until force-recover.
 final class HistoryPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+}
+
+/// Docked berth: never key (Pulse `FloatingPanel`). Toggle/paste/arrows use
+/// Carbon + monitors; search requires a click only on the undocked panel.
+final class DockedHistoryPanel: HistoryPanel {
+    override var canBecomeKey: Bool { false }
 }
 
 // MARK: - SwiftUI root

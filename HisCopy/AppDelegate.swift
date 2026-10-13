@@ -275,6 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 粘贴路径必须立刻收起，避免焦点交还竞态；Esc/热键/点外部可短 fade。
         guard animated, window.isVisible else {
             finish()
+            GlobalHotKeyManager.shared.forceRecoverCarbon(reason: "undocked-hide")
             GlobalHotKeyManager.shared.reregister()
             return
         }
@@ -284,6 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.animator().alphaValue = 0
         }, completionHandler: {
             finish()
+            GlobalHotKeyManager.shared.forceRecoverCarbon(reason: "undocked-hide-animated")
             GlobalHotKeyManager.shared.reregister()
         })
     }
@@ -323,7 +325,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.worksWhenModal = true
         // 松手/短暂失活时不要自动消失；仅由热键再次按下、Esc、粘贴、点外部等关闭。
         window.hidesOnDeactivate = false
-        window.becomesKeyOnlyIfNeeded = false
+        window.becomesKeyOnlyIfNeeded = true
         window.contentViewController = hosting
         historyWindow = window
         presentHistoryWindow(window)
@@ -334,7 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let panel = window as? NSPanel {
             panel.styleMask.insert(.nonactivatingPanel)
             panel.worksWhenModal = true
-            panel.becomesKeyOnlyIfNeeded = false
+            panel.becomesKeyOnlyIfNeeded = true
         }
 
         // Capture destination while it is still frontmost (we must NOT NSApp.activate).
@@ -344,23 +346,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         window.alphaValue = 1
         window.center()
-        // Key without activating HisCopy — destination app stays frontmost.
+        // v0.8.6: never makeKeyAndOrderFront — kills Carbon Pressed (see hotkey.log).
+        // orderFrontRegardless only (Pulse). Click the panel to focus search.
         window.orderFrontRegardless()
-        window.makeKeyAndOrderFront(nil)
-        // Do NOT call NSApp.activate(ignoringOtherApps:). That was the v0.7.1 failure mode:
-        // dialogs/Electron fields lose first responder and often never get it back.
-
-        if let content = window.contentView {
-            _ = window.makeFirstResponder(content)
-        }
+        // Do NOT call NSApp.activate / makeKeyAndOrderFront.
         installPanelDismissMonitors()
         NotificationCenter.default.post(name: .hisCopyHistoryPanelDidOpen, object: nil)
-        DispatchQueue.main.async {
-            window.makeKeyAndOrderFront(nil)
-            if let content = window.contentView {
-                _ = window.makeFirstResponder(content)
-            }
-        }
+        HotKeyTrace.line("undocked present NO makeKey keyWin=\(NSApp.keyWindow?.title ?? "nil")")
     }
 
     /// Esc 与点击外部关闭面板（再次 ⇧⌘V / 粘贴成功另有路径）。

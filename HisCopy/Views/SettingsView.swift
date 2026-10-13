@@ -149,7 +149,7 @@ struct SettingsView: View {
             } header: {
                 Label("全局快捷键", systemImage: "keyboard")
             } footer: {
-                Text("默认 ⇧⌘V。打开面板时会暂时让出 Carbon 给粘贴热键，关闭后立即恢复（勿与 ⌘V 同时注册）。无辅助功能时仅靠 Carbon，必须保持该恢复路径。全局监听/CGEvent 需辅助功能。诊断：~/Library/Logs/HisCopy/hotkey.log")
+                Text("默认 ⇧⌘V。吸附模式面板永不成为 key（对齐 Pulse），避免 Carbon 热键失效；关闭后面强制恢复注册。⌘V 纯文本在吸附模式下请点按钮或先点面板（不吸附可点进搜索）。全局监听/CGEvent 需辅助功能。诊断：~/Library/Logs/HisCopy/hotkey.log")
             }
 
             Section {
