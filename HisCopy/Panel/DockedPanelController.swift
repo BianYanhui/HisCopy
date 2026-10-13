@@ -173,11 +173,28 @@ final class DockedPanelController {
 
     /// ⇧⌘V in docked mode: pop out from the dock (or retract if already open).
     func toggleFromHotKey() {
+        // Heal: state said `.open` but the berth was ordered out (paste / settle
+        // race). Treating that as still-open would only call `retract()` (a no-op
+        // visually) and leave the next presses looking dead.
+        if state == .open, window?.isVisible != true {
+            tearDownDismissMonitors?()
+            PanelPasteShortcutGate.shared.reset()
+            state = .collapsed
+            outsideSince = nil
+            hoverSince = nil
+            transitionToken += 1
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { model.isOpen = false }
+        }
+
         if state == .open {
             retract()
         } else {
             open(fromHotKey: true)
         }
+        // Berth keying often drops Carbon HotKeyReleased; unlock the next press.
+        GlobalHotKeyManager.shared.clearPressSuppressionIfChordReleased()
     }
 
     /// Order the berth window in (collapsed) and spring it open on the next tick,
@@ -185,15 +202,17 @@ final class DockedPanelController {
     private func showBerth() {
         guard let window else { return }
         transitionToken += 1
+        // Paste left alpha at 0; always restore before ordering front.
+        window.alphaValue = 1
         if !window.isVisible {
             var t = Transaction()
             t.disablesAnimations = true
             withTransaction(t) { model.isOpen = false }
-            window.alphaValue = 1
             window.orderFrontRegardless()
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.state != .collapsed else { return }
                 withAnimation(Self.berthSpring) { self.model.isOpen = true }
+                GlobalHotKeyManager.shared.clearPressSuppressionIfChordReleased()
             }
         } else {
             withAnimation(Self.berthSpring) { model.isOpen = true }
@@ -263,6 +282,7 @@ final class DockedPanelController {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.closeSettle) { [weak self] in
             guard let self, self.transitionToken == token, self.state == .collapsed else { return }
             self.window?.orderOut(nil)
+            GlobalHotKeyManager.shared.clearPressSuppressionIfChordReleased()
         }
     }
 
@@ -283,6 +303,7 @@ final class DockedPanelController {
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) { model.isOpen = false }
+        GlobalHotKeyManager.shared.clearPressSuppressionIfChordReleased()
     }
 
     // MARK: - Pointer sampling (Pulse PanelPointerWatcher)

@@ -5,8 +5,14 @@ import Combine
 /// 使用 Carbon `RegisterEventHotKey` 注册全局热键（零第三方依赖，思路接近 Maccy）。
 /// 仅用于呼出/隐藏面板；模拟 ⌘V 粘贴由 PasteController 负责（需要辅助功能权限）。
 ///
-/// 只在 **keyDown（kEventHotKeyPressed）** 时 toggle；**忽略 keyUp（kEventHotKeyReleased）**。
+/// 只在 **keyDown（kEventHotKeyPressed）** 时 toggle；**忽略 keyUp（kEventHotKeyReleased）** 上的 toggle。
 /// 同一次物理按下若系统重复投递 Pressed，在和弦松开前会被抑制，避免「松手又关面板」。
+///
+/// v0.8.2: `kEventHotKeyReleased` is not reliable after a `.nonactivatingPanel`
+/// becomes key (especially the v0.8.1 dual-window docked berth). If that event
+/// is dropped, `ignorePressedUntilChordRelease` stayed true forever and every
+/// later ⇧⌘V was discarded. Clear the flag by polling the real key state too
+/// (same approach as `PanelPasteShortcutGate`), with a hard timeout.
 @MainActor
 final class GlobalHotKeyManager: ObservableObject {
     static let shared = GlobalHotKeyManager()
@@ -15,6 +21,8 @@ final class GlobalHotKeyManager: ObservableObject {
     private static let hotKeyID: UInt32 = 1
     private static let defaultsKeyCode = "globalHotKeyKeyCode"
     private static let defaultsModifiers = "globalHotKeyCarbonModifiers"
+    private static let chordPollInterval: TimeInterval = 0.05
+    private static let forceClearAfter: TimeInterval = 1.5
 
     @Published private(set) var shortcut: HotKeyShortcut
     /// 非空表示当前快捷键未能注册（多为冲突）。
@@ -25,8 +33,10 @@ final class GlobalHotKeyManager: ObservableObject {
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
     private var eventHandlerInstalled = false
-    /// 已处理过一次 Pressed，和弦尚未松开：忽略重复 Pressed，Released 只清旗标。
+    /// 已处理过一次 Pressed，和弦尚未松开：忽略重复 Pressed，Released/poll 只清旗标。
     private var ignorePressedUntilChordRelease = false
+    private var chordPollWorkItem: DispatchWorkItem?
+    private var suppressionStartedAt: Date?
 
     private init() {
         let defaults = UserDefaults.standard
@@ -47,10 +57,10 @@ final class GlobalHotKeyManager: ObservableObject {
 
     func stop() {
         unregister()
-        ignorePressedUntilChordRelease = false
+        clearPressSuppression()
     }
 
-    /// 更新快捷键、写入 UserDefaults，并立即重新注册。
+    /// Update shortcut、写入 UserDefaults，并立即重新注册。
     func updateShortcut(_ newValue: HotKeyShortcut) {
         shortcut = newValue
         persist(newValue)
@@ -59,6 +69,17 @@ final class GlobalHotKeyManager: ObservableObject {
 
     func resetToDefault() {
         updateShortcut(.default)
+    }
+
+    /// Call after a panel open/close that may have eaten `kEventHotKeyReleased`
+    /// (docked berth key transition). Safe: only clears when the chord is up.
+    func clearPressSuppressionIfChordReleased() {
+        guard ignorePressedUntilChordRelease else { return }
+        if isShortcutChordFullyReleased() {
+            clearPressSuppression()
+        } else {
+            scheduleChordPoll()
+        }
     }
 
     private func persist(_ value: HotKeyShortcut) {
@@ -102,7 +123,7 @@ final class GlobalHotKeyManager: ObservableObject {
 
         if kind == UInt32(kEventHotKeyReleased) {
             // keyUp：绝不 toggle，只允许下一次真正的 keyDown。
-            ignorePressedUntilChordRelease = false
+            clearPressSuppression()
             return
         }
 
@@ -112,13 +133,60 @@ final class GlobalHotKeyManager: ObservableObject {
         if ignorePressedUntilChordRelease { return }
 
         ignorePressedUntilChordRelease = true
+        suppressionStartedAt = Date()
         onHotKeyPressed?()
+        // Don't rely solely on Released — docked panel keying often drops it.
+        scheduleChordPoll()
+    }
+
+    private func scheduleChordPoll() {
+        chordPollWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pollChordRelease()
+        }
+        chordPollWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.chordPollInterval, execute: work)
+    }
+
+    private func pollChordRelease() {
+        guard ignorePressedUntilChordRelease else {
+            chordPollWorkItem = nil
+            return
+        }
+        if isShortcutChordFullyReleased() {
+            clearPressSuppression()
+            return
+        }
+        if let started = suppressionStartedAt,
+           Date().timeIntervalSince(started) >= Self.forceClearAfter {
+            clearPressSuppression()
+            return
+        }
+        scheduleChordPoll()
+    }
+
+    private func clearPressSuppression() {
+        ignorePressedUntilChordRelease = false
+        suppressionStartedAt = nil
+        chordPollWorkItem?.cancel()
+        chordPollWorkItem = nil
+    }
+
+    /// True when no modifier from the registered chord is held and the key is up.
+    private func isShortcutChordFullyReleased() -> Bool {
+        let mods = NSEvent.modifierFlags.intersection([.command, .shift, .option, .control])
+        if !mods.isEmpty { return false }
+        if CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(shortcut.keyCode)) {
+            return false
+        }
+        return true
     }
 
     private func registerCurrentShortcut() {
         unregister()
         registrationFailureMessage = nil
-        ignorePressedUntilChordRelease = false
+        clearPressSuppression()
 
         guard shortcut.isValid else {
             registrationFailureMessage = "快捷键无效：请至少包含一个修饰键（⌘ / ⌥ / ⌃ / ⇧）。"
