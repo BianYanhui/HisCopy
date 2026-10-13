@@ -38,6 +38,10 @@ final class PasteController: ObservableObject {
         let trusted = Self.queryTrusted(prompt: prompt)
         isAccessibilityTrusted = trusted
         trustHint = trusted ? nil : Self.staleTCCHint
+        if trusted {
+            // CGEvent hotkey tap needs Accessibility; install when it flips on.
+            GlobalHotKeyManager.shared.reregister()
+        }
         return trusted
     }
 

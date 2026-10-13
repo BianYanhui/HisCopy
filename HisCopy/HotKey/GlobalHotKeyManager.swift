@@ -1,23 +1,17 @@
 import AppKit
 import Carbon
 import Combine
-import os.log
 
-private let hotKeyLog = Logger(subsystem: "com.bianyanhui.HisCopy", category: "HotKey")
-
-/// Global open/close hotkey via Carbon `RegisterEventHotKey`.
+/// Open/close hotkey. v0.8.4: Carbon alone dies after a `.nonactivatingPanel`
+/// becomes key (Pressed never arrives — Console silent). Dual path:
+/// 1. Carbon `RegisterEventHotKey` on `GetEventDispatcherTarget` (still useful)
+/// 2. `NSEvent` local + global keyDown monitors for the configured chord
+/// 3. Session `CGEvent` tap when Accessibility is trusted (sees keys even when
+///    Carbon is mute and when another app is frontmost)
 ///
-/// v0.8.3 — why v0.8.2 still failed:
-/// The ignore-until-Released / chord-poll gate was not the live failure mode.
-/// After the docked berth calls `makeKeyAndOrderFront`, subsequent hotkey
-/// `Pressed` events often never reach a handler installed on
-/// `GetApplicationEventTarget()` (menu-bar / nonactivating-panel quirk).
-/// Clearing `ignorePressedUntilChordRelease` then did nothing: there was no
-/// Pressed to unblock. Pulse registers on `GetEventDispatcherTarget()` and
-/// fires on every Pressed with no Released gate — that is what we do now.
-///
-/// Duplicate Pressed (menu keyEquivalent races, sticky keys) is filtered with
-/// a 300ms timestamp debounce, not a Released latch.
+/// All paths share one 300ms debounce. Pulse keeps its panel `canBecomeKey =
+/// false`; HisCopy docked hotkey open likewise avoids `makeKey` (see
+/// DockedPanelController) so Carbon is less likely to go silent.
 @MainActor
 final class GlobalHotKeyManager: ObservableObject {
     static let shared = GlobalHotKeyManager()
@@ -26,11 +20,9 @@ final class GlobalHotKeyManager: ObservableObject {
     private static let hotKeyID: UInt32 = 1
     private static let defaultsKeyCode = "globalHotKeyKeyCode"
     private static let defaultsModifiers = "globalHotKeyCarbonModifiers"
-    /// Ignore a second Pressed this soon after a handled one (not a Released latch).
     private static let debounceInterval: TimeInterval = 0.30
 
     @Published private(set) var shortcut: HotKeyShortcut
-    /// 非空表示当前快捷键未能注册（多为冲突）。
     @Published private(set) var registrationFailureMessage: String?
 
     var onHotKeyPressed: (() -> Void)?
@@ -38,7 +30,12 @@ final class GlobalHotKeyManager: ObservableObject {
     private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
     private var eventHandlerInstalled = false
-    private var lastHandledPressedAt: Date?
+    private var localMonitor: Any?
+    private var globalMonitor: Any?
+    private var eventTap: CFMachPort?
+    private var eventTapSource: CFRunLoopSource?
+    private var lastHandledAt: Date?
+    private var axObserver: NSObjectProtocol?
 
     private init() {
         let defaults = UserDefaults.standard
@@ -53,31 +50,86 @@ final class GlobalHotKeyManager: ObservableObject {
     }
 
     func start() {
-        installEventHandlerIfNeeded()
-        registerCurrentShortcut()
+        let ver = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        HotKeyTrace.line("start v\(ver) (\(build)) shortcut=\(shortcut.displayString) log=\(HotKeyTrace.logFileURL.path)")
+        installCarbonHandlerIfNeeded()
+        registerCarbon()
+        installEventMonitors()
+        installEventTapIfPossible()
+        axObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.installEventTapIfPossible() }
+        }
     }
 
     func stop() {
-        unregister()
-        lastHandledPressedAt = nil
+        unregisterCarbon()
+        removeEventMonitors()
+        removeEventTap()
+        if let axObserver {
+            NotificationCenter.default.removeObserver(axObserver)
+            self.axObserver = nil
+        }
+        lastHandledAt = nil
     }
 
-    /// Update shortcut、写入 UserDefaults，并立即重新注册。
     func updateShortcut(_ newValue: HotKeyShortcut) {
         shortcut = newValue
         persist(newValue)
-        registerCurrentShortcut()
+        HotKeyTrace.line("shortcut → \(newValue.displayString)")
+        registerCarbon()
+        // Monitors read `shortcut` live; tap callback does too.
     }
 
     func resetToDefault() {
         updateShortcut(.default)
     }
 
-    /// Re-bind with the window server after panel open/close. Heals a dead
-    /// `EventHotKeyRef` if macOS dropped it when the nonactivating berth keyed.
+    /// After panel close — refresh Carbon + ensure tap/monitors still alive.
     func reregister() {
-        registerCurrentShortcut()
+        HotKeyTrace.line("reregister")
+        registerCarbon()
+        if localMonitor == nil || globalMonitor == nil {
+            installEventMonitors()
+        }
+        if let eventTap {
+            CGEvent.tapEnable(tap: eventTap, enable: true)
+        } else {
+            installEventTapIfPossible()
+        }
     }
+
+    // MARK: - Fire (all paths)
+
+    /// - Parameter source: "carbon" / "local" / "global" / "cgevent"
+    /// - Parameter swallow: whether the caller should eat the key event
+    @discardableResult
+    func handleChord(source: String) -> Bool {
+        let now = Date()
+        if let last = lastHandledAt, now.timeIntervalSince(last) < Self.debounceInterval {
+            HotKeyTrace.line("debounce skip source=\(source)")
+            return false
+        }
+        lastHandledAt = now
+        HotKeyTrace.line("FIRE source=\(source) shortcut=\(shortcut.displayString)")
+        onHotKeyPressed?()
+        return true
+    }
+
+    func eventMatchesShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown else { return false }
+        // Ignore key-repeat; debounce also covers it.
+        if event.isARepeat { return false }
+        guard UInt32(event.keyCode) == shortcut.keyCode else { return false }
+        let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        return mods == shortcut.cocoaModifierFlags
+    }
+
+    // MARK: - Carbon
 
     private func persist(_ value: HotKeyShortcut) {
         let defaults = UserDefaults.standard
@@ -85,10 +137,8 @@ final class GlobalHotKeyManager: ObservableObject {
         defaults.set(Int(value.carbonModifiers), forKey: Self.defaultsModifiers)
     }
 
-    private func installEventHandlerIfNeeded() {
+    private func installCarbonHandlerIfNeeded() {
         guard !eventHandlerInstalled else { return }
-
-        // Pressed only — same as Pulse. No Released latch.
         var specs = [
             EventTypeSpec(
                 eventClass: OSType(kEventClassKeyboard),
@@ -96,8 +146,6 @@ final class GlobalHotKeyManager: ObservableObject {
             ),
         ]
         let userData = Unmanaged.passUnretained(self).toOpaque()
-        // GetEventDispatcherTarget — Pulse / reliable for accessory + nonactivating panels.
-        // GetApplicationEventTarget stopped receiving Pressed after the berth became key.
         let status = InstallEventHandler(
             GetEventDispatcherTarget(),
             hotKeyEventCallback,
@@ -106,37 +154,25 @@ final class GlobalHotKeyManager: ObservableObject {
             userData,
             &handlerRef
         )
-        if status == noErr {
-            eventHandlerInstalled = true
-        } else {
-            registrationFailureMessage = "无法安装全局热键事件处理（错误码 \(status)）。"
-            hotKeyLog.error("InstallEventHandler failed: \(status, privacy: .public)")
+        eventHandlerInstalled = (status == noErr)
+        HotKeyTrace.line("carbon InstallEventHandler status=\(status)")
+        if status != noErr {
+            registrationFailureMessage = "无法安装 Carbon 热键处理（错误码 \(status)）。仍将使用监听器回退。"
         }
     }
 
-    fileprivate func handleCarbonHotKey(kind: UInt32, id: EventHotKeyID) {
+    fileprivate func handleCarbonPressed(id: EventHotKeyID) {
         guard id.signature == Self.signature, id.id == Self.hotKeyID else { return }
-        guard kind == UInt32(kEventHotKeyPressed) else { return }
-
-        let now = Date()
-        if let last = lastHandledPressedAt, now.timeIntervalSince(last) < Self.debounceInterval {
-            hotKeyLog.debug("Pressed debounced (\(now.timeIntervalSince(last), format: .fixed(precision: 3))s)")
-            return
-        }
-        lastHandledPressedAt = now
-        hotKeyLog.info("Pressed → toggle (\(self.shortcut.displayString, privacy: .public))")
-        onHotKeyPressed?()
+        handleChord(source: "carbon")
     }
 
-    private func registerCurrentShortcut() {
-        unregister()
+    private func registerCarbon() {
+        unregisterCarbon()
         registrationFailureMessage = nil
-
         guard shortcut.isValid else {
             registrationFailureMessage = "快捷键无效：请至少包含一个修饰键（⌘ / ⌥ / ⌃ / ⇧）。"
             return
         }
-
         var hotKeyID = EventHotKeyID(signature: Self.signature, id: Self.hotKeyID)
         var ref: EventHotKeyRef?
         let status = RegisterEventHotKey(
@@ -147,30 +183,121 @@ final class GlobalHotKeyManager: ObservableObject {
             0,
             &ref
         )
-
         if status == noErr, let ref {
             hotKeyRef = ref
-            registrationFailureMessage = nil
-            hotKeyLog.info("Registered \(self.shortcut.displayString, privacy: .public)")
+            HotKeyTrace.line("carbon RegisterEventHotKey OK")
         } else {
             hotKeyRef = nil
-            let name = shortcut.displayString
             registrationFailureMessage =
-                "快捷键 \(name) 注册失败（可能与其他应用冲突，错误码 \(status)）。请在设置中更换。"
-            hotKeyLog.error("RegisterEventHotKey failed: \(status, privacy: .public)")
+                "Carbon 快捷键 \(shortcut.displayString) 注册失败（\(status)）。已启用监听器回退。"
+            HotKeyTrace.line("carbon RegisterEventHotKey FAIL status=\(status)")
         }
     }
 
-    private func unregister() {
+    private func unregisterCarbon() {
         if let hotKeyRef {
             UnregisterEventHotKey(hotKeyRef)
             self.hotKeyRef = nil
         }
     }
+
+    // MARK: - NSEvent monitors (local + global)
+
+    private func installEventMonitors() {
+        removeEventMonitors()
+
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            return MainActor.assumeIsolated {
+                guard self.eventMatchesShortcut(event) else { return event }
+                _ = self.handleChord(source: "local")
+                return nil // swallow
+            }
+        }
+
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                guard self.eventMatchesShortcut(event) else { return }
+                _ = self.handleChord(source: "global")
+            }
+        }
+
+        HotKeyTrace.line(
+            "monitors local=\(localMonitor != nil) global=\(globalMonitor != nil) (global needs Accessibility/Input Monitoring)"
+        )
+    }
+
+    private func removeEventMonitors() {
+        if let localMonitor {
+            NSEvent.removeMonitor(localMonitor)
+            self.localMonitor = nil
+        }
+        if let globalMonitor {
+            NSEvent.removeMonitor(globalMonitor)
+            self.globalMonitor = nil
+        }
+    }
+
+    // MARK: - CGEvent tap (AX)
+
+    private func installEventTapIfPossible() {
+        if eventTap != nil { return }
+        // Session tap needs Accessibility (same entitlement paste already needs).
+        guard AXIsProcessTrusted() else {
+            HotKeyTrace.line("cgevent tap skipped — Accessibility not trusted")
+            return
+        }
+
+        let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
+        let userInfo = Unmanaged.passUnretained(self).toOpaque()
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: hotKeyCGEventCallback,
+            userInfo: userInfo
+        ) else {
+            HotKeyTrace.line("cgevent tapCreate failed")
+            return
+        }
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+        eventTap = tap
+        eventTapSource = source
+        HotKeyTrace.line("cgevent tap installed")
+    }
+
+    private func removeEventTap() {
+        if let eventTap {
+            CGEvent.tapEnable(tap: eventTap, enable: false)
+            if let eventTapSource {
+                CFRunLoopRemoveSource(CFRunLoopGetMain(), eventTapSource, .commonModes)
+            }
+            self.eventTap = nil
+            self.eventTapSource = nil
+        }
+    }
+
+    fileprivate func handleCGKeyDown(_ event: CGEvent) -> Bool {
+        let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
+        guard keyCode == shortcut.keyCode else { return false }
+        if event.getIntegerValueField(.keyboardEventAutorepeat) != 0 { return false }
+
+        var mods: NSEvent.ModifierFlags = []
+        let flags = event.flags
+        if flags.contains(.maskCommand) { mods.insert(.command) }
+        if flags.contains(.maskShift) { mods.insert(.shift) }
+        if flags.contains(.maskAlternate) { mods.insert(.option) }
+        if flags.contains(.maskControl) { mods.insert(.control) }
+        guard mods == shortcut.cocoaModifierFlags else { return false }
+
+        return handleChord(source: "cgevent")
+    }
 }
 
-/// Carbon C callback. The dispatcher target invokes this on the main run loop
-/// (same assumption Pulse makes) — call the actor directly, no `Task` hop.
 private func hotKeyEventCallback(
     nextHandler: EventHandlerCallRef?,
     theEvent: EventRef?,
@@ -179,9 +306,6 @@ private func hotKeyEventCallback(
     guard let theEvent, let userData else {
         return OSStatus(eventNotHandledErr)
     }
-
-    let kind = GetEventKind(theEvent)
-
     var hotKeyID = EventHotKeyID()
     let err = GetEventParameter(
         theEvent,
@@ -192,13 +316,46 @@ private func hotKeyEventCallback(
         nil,
         &hotKeyID
     )
-    guard err == noErr else {
-        return err
-    }
-
+    guard err == noErr else { return err }
     let manager = Unmanaged<GlobalHotKeyManager>.fromOpaque(userData).takeUnretainedValue()
     MainActor.assumeIsolated {
-        manager.handleCarbonHotKey(kind: kind, id: hotKeyID)
+        manager.handleCarbonPressed(id: hotKeyID)
     }
     return noErr
+}
+
+private func hotKeyCGEventCallback(
+    proxy: CGEventTapProxy,
+    type: CGEventType,
+    event: CGEvent,
+    userInfo: UnsafeMutableRawPointer?
+) -> Unmanaged<CGEvent>? {
+    guard let userInfo else {
+        return Unmanaged.passUnretained(event)
+    }
+    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+        let manager = Unmanaged<GlobalHotKeyManager>.fromOpaque(userInfo).takeUnretainedValue()
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { manager.reregister() }
+        }
+        return Unmanaged.passUnretained(event)
+    }
+    guard type == .keyDown else {
+        return Unmanaged.passUnretained(event)
+    }
+    let manager = Unmanaged<GlobalHotKeyManager>.fromOpaque(userInfo).takeUnretainedValue()
+    var handled = false
+    if Thread.isMainThread {
+        MainActor.assumeIsolated {
+            handled = manager.handleCGKeyDown(event)
+        }
+    } else {
+        DispatchQueue.main.sync {
+            MainActor.assumeIsolated {
+                handled = manager.handleCGKeyDown(event)
+            }
+        }
+    }
+    // Swallow when we toggle so ⇧⌘V does not type into the front app.
+    return handled ? nil : Unmanaged.passUnretained(event)
 }
