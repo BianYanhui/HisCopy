@@ -1,138 +1,123 @@
 import AppKit
+import ApplicationServices
 import Carbon
 import Combine
 
-/// Open/close hotkey.
+/// Global open/close hotkey for the history panel.
 ///
-/// v0.8.6 — v0.8.5 removed paste ⌘V but Carbon still died after the first
-/// docked `makeKeyAndOrderFront` (user log: FIRE once, then silence with
-/// `hasRef=true`). Pulse never makes its panel key. We never call makeKey;
-/// on every panel close we `forceRecoverCarbon` (Unregister+Register once)
-/// *after* the berth has resigned key. Heartbeat logs ref state every 2s.
+/// **Architecture (v0.8.7)**
+/// 1. **Primary:** session `CGEvent` tap when Accessibility is trusted (reliable
+///    after panel show/hide; what works on the user’s Mac).
+/// 2. **Secondary:** `NSEvent` local + global keyDown monitors (local covers a
+///    keyed undocked panel; global needs AX like the tap).
+/// 3. **Optional backup:** Carbon `RegisterEventHotKey` — never paired with a
+///    paste ⌘V hotkey; docked panel never becomes key (see DockedHistoryPanel).
+///
+/// Accessibility is required for a reliable shortcut. Without it, Carbon may
+/// work once then go silent; Settings prompts the user to authorize this binary.
 @MainActor
 final class GlobalHotKeyManager: ObservableObject {
     static let shared = GlobalHotKeyManager()
 
-    private static let signature: OSType = 0x4853_4350 // "HSCP"
-    private static let hotKeyID: UInt32 = 1
+    private static let carbonSignature: OSType = 0x4853_4350 // "HSCP"
+    private static let carbonHotKeyID: UInt32 = 1
     private static let defaultsKeyCode = "globalHotKeyKeyCode"
     private static let defaultsModifiers = "globalHotKeyCarbonModifiers"
     private static let debounceInterval: TimeInterval = 0.30
 
     @Published private(set) var shortcut: HotKeyShortcut
     @Published private(set) var registrationFailureMessage: String?
+    /// True when the CGEvent tap is installed and enabled.
+    @Published private(set) var eventTapActive = false
 
     var onHotKeyPressed: (() -> Void)?
 
-    private var hotKeyRef: EventHotKeyRef?
-    private var handlerRef: EventHandlerRef?
-    private var eventHandlerInstalled = false
+    private var carbonRef: EventHotKeyRef?
+    private var carbonHandlerRef: EventHandlerRef?
+    private var carbonHandlerInstalled = false
     private var localMonitor: Any?
     private var globalMonitor: Any?
     private var eventTap: CFMachPort?
     private var eventTapSource: CFRunLoopSource?
     private var lastHandledAt: Date?
-    private var axObserver: NSObjectProtocol?
-    /// Open hotkey temporarily off so paste can own ⌘V / Return via Carbon.
-    private var suspendedForPanel = false
-    private var heartbeatTimer: Timer?
-    private var lastCarbonFireAt: Date?
+    private var becomeActiveObserver: NSObjectProtocol?
 
     private init() {
         let defaults = UserDefaults.standard
         if defaults.object(forKey: Self.defaultsKeyCode) != nil {
-            let code = UInt32(defaults.integer(forKey: Self.defaultsKeyCode))
-            let mods = UInt32(defaults.integer(forKey: Self.defaultsModifiers))
-            shortcut = HotKeyShortcut(keyCode: code, carbonModifiers: mods)
+            shortcut = HotKeyShortcut(
+                keyCode: UInt32(defaults.integer(forKey: Self.defaultsKeyCode)),
+                carbonModifiers: UInt32(defaults.integer(forKey: Self.defaultsModifiers))
+            )
         } else {
             shortcut = .default
             persist(shortcut)
         }
     }
 
+    // MARK: - Lifecycle
+
     func start() {
         let ver = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
-        HotKeyTrace.line("start v\(ver) (\(build)) shortcut=\(shortcut.displayString) log=\(HotKeyTrace.logFileURL.path)")
+        HotKeyTrace.line("start v\(ver) (\(build)) shortcut=\(shortcut.displayString)")
+
         installCarbonHandlerIfNeeded()
-        registerCarbonIfNeeded(reason: "start")
+        registerCarbonBackup()
         installEventMonitors()
-        installEventTapIfPossible()
-        startHeartbeat()
-        axObserver = NotificationCenter.default.addObserver(
+        refreshAccessibilityDependentPaths(prompt: false)
+
+        becomeActiveObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.installEventTapIfPossible() }
+            MainActor.assumeIsolated {
+                self?.refreshAccessibilityDependentPaths(prompt: false)
+            }
         }
     }
 
     func stop() {
-        suspendedForPanel = false
-        unregisterCarbon(reason: "stop")
-        removeEventMonitors()
-        removeEventTap()
-        if let axObserver {
-            NotificationCenter.default.removeObserver(axObserver)
-            self.axObserver = nil
+        if let becomeActiveObserver {
+            NotificationCenter.default.removeObserver(becomeActiveObserver)
+            self.becomeActiveObserver = nil
         }
+        removeEventTap()
+        removeEventMonitors()
+        unregisterCarbon()
         lastHandledAt = nil
-        stopHeartbeat()
+        eventTapActive = false
     }
 
     func updateShortcut(_ newValue: HotKeyShortcut) {
         shortcut = newValue
         persist(newValue)
         HotKeyTrace.line("shortcut → \(newValue.displayString)")
-        // Only time we replace the open-hotkey registration (besides suspend/resume).
-        if !suspendedForPanel {
-            unregisterCarbon(reason: "shortcut-change")
-            registerCarbonIfNeeded(reason: "shortcut-change")
-        }
+        unregisterCarbon()
+        registerCarbonBackup()
+        // Monitors / tap read `shortcut` live.
     }
 
     func resetToDefault() {
         updateShortcut(.default)
     }
 
-    /// Panel about to install paste Carbon hotkeys (often ⌘V). Must not coexist
-    /// with an open hotkey on the same key code.
-    func suspendOpenHotKeyForPanelSession() {
-        guard !suspendedForPanel else { return }
-        suspendedForPanel = true
-        HotKeyTrace.line("carbon SUSPEND open hotkey for panel paste keys")
-        unregisterCarbon(reason: "suspend-for-panel")
-    }
+    /// Call after TCC changes (Settings “重新检查” / prompt).
+    func refreshAccessibilityDependentPaths(prompt: Bool) {
+        let trusted = AXIsProcessTrustedWithOptions([
+            kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: prompt
+        ] as CFDictionary)
 
-    /// Paste Carbon hotkeys are gone — put the open hotkey back exactly once.
-    func resumeOpenHotKeyAfterPanelSession() {
-        guard suspendedForPanel else {
-            // Still ensure we have a live registration if something cleared it.
-            if hotKeyRef == nil {
-                registerCarbonIfNeeded(reason: "resume-missing")
-            }
-            return
-        }
-        suspendedForPanel = false
-        HotKeyTrace.line("carbon RESUME open hotkey after panel")
-        registerCarbonIfNeeded(reason: "resume-after-panel")
-    }
-
-    /// Refresh monitors / CGEvent only. Does **not** Unregister+Register the
-    /// open hotkey (that was the v0.8.4 post-close death spiral).
-    func reregister() {
-        HotKeyTrace.line("reregister (monitors/tap only; carbon untouched suspended=\(suspendedForPanel) hasRef=\(hotKeyRef != nil))")
-        if localMonitor == nil || globalMonitor == nil {
-            installEventMonitors()
-        }
-        if let eventTap {
-            CGEvent.tapEnable(tap: eventTap, enable: true)
+        if trusted {
+            installEventTapIfNeeded()
+            if globalMonitor == nil { installEventMonitors() }
+            HotKeyTrace.line("AX trusted; tapActive=\(eventTapActive)")
         } else {
-            installEventTapIfPossible()
-        }
-        if !suspendedForPanel, hotKeyRef == nil {
-            registerCarbonIfNeeded(reason: "reregister-missing")
+            removeEventTap()
+            HotKeyTrace.important(
+                "辅助功能未授权：全局快捷键不可靠。请在系统设置中为本进程 HisCopy 打开辅助功能（删除陈旧条目后重新添加当前 .app）。"
+            )
         }
     }
 
@@ -146,139 +131,84 @@ final class GlobalHotKeyManager: ObservableObject {
             return false
         }
         lastHandledAt = now
-        HotKeyTrace.line("FIRE source=\(source) shortcut=\(shortcut.displayString) suspended=\(suspendedForPanel)")
+        HotKeyTrace.line("FIRE source=\(source)")
         onHotKeyPressed?()
         return true
     }
 
     func eventMatchesShortcut(_ event: NSEvent) -> Bool {
-        guard event.type == .keyDown else { return false }
-        if event.isARepeat { return false }
+        guard event.type == .keyDown, !event.isARepeat else { return false }
         guard UInt32(event.keyCode) == shortcut.keyCode else { return false }
         let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
         return mods == shortcut.cocoaModifierFlags
     }
 
-    // MARK: - Carbon
+    // MARK: - CGEvent tap (primary)
 
-    private func persist(_ value: HotKeyShortcut) {
-        let defaults = UserDefaults.standard
-        defaults.set(Int(value.keyCode), forKey: Self.defaultsKeyCode)
-        defaults.set(Int(value.carbonModifiers), forKey: Self.defaultsModifiers)
-    }
-
-    private func installCarbonHandlerIfNeeded() {
-        guard !eventHandlerInstalled else { return }
-        var specs = [
-            EventTypeSpec(
-                eventClass: OSType(kEventClassKeyboard),
-                eventKind: UInt32(kEventHotKeyPressed)
-            ),
-        ]
-        let userData = Unmanaged.passUnretained(self).toOpaque()
-        let status = InstallEventHandler(
-            GetEventDispatcherTarget(),
-            hotKeyEventCallback,
-            Int(specs.count),
-            &specs,
-            userData,
-            &handlerRef
-        )
-        eventHandlerInstalled = (status == noErr)
-        HotKeyTrace.line("carbon InstallEventHandler status=\(status)")
-        if status != noErr {
-            registrationFailureMessage = "无法安装 Carbon 热键处理（错误码 \(status)）。"
-        }
-    }
-
-    fileprivate func handleCarbonPressed(id: EventHotKeyID) {
-        guard id.signature == Self.signature, id.id == Self.hotKeyID else { return }
-        lastCarbonFireAt = Date()
-        handleChord(source: "carbon")
-    }
-
-    /// Unregister+Register once after the panel has resigned key. The live
-    /// `EventHotKeyRef` can look valid (`hasRef=true`) while the window server
-    /// no longer delivers Pressed — that was the v0.8.5 post-makeKey failure.
-    func forceRecoverCarbon(reason: String) {
-        HotKeyTrace.line(
-            "carbon FORCE RECOVER reason=\(reason) wasRef=\(hotKeyRef != nil) suspended=\(suspendedForPanel) keyWin=\(NSApp.keyWindow?.title ?? "nil")"
-        )
-        guard !suspendedForPanel else {
-            HotKeyTrace.line("carbon FORCE RECOVER skipped (suspended)")
+    private func installEventTapIfNeeded() {
+        if eventTap != nil {
+            if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: true) }
+            eventTapActive = true
             return
         }
-        unregisterCarbon(reason: "force-recover:\(reason)")
-        registerCarbonIfNeeded(reason: "force-recover:\(reason)")
-    }
-
-    private func startHeartbeat() {
-        stopHeartbeat()
-        let timer = Timer(timeInterval: 2.0, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.heartbeat() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        heartbeatTimer = timer
-    }
-
-    private func stopHeartbeat() {
-        heartbeatTimer?.invalidate()
-        heartbeatTimer = nil
-    }
-
-    private func heartbeat() {
-        let ago: String
-        if let last = lastCarbonFireAt {
-            ago = String(format: "%.1fs", Date().timeIntervalSince(last))
-        } else {
-            ago = "never"
-        }
-        HotKeyTrace.line(
-            "heartbeat hasRef=\(hotKeyRef != nil) suspended=\(suspendedForPanel) lastCarbonFire=\(ago) keyWin=\(NSApp.keyWindow?.title ?? "nil") active=\(NSApp.isActive)"
-        )
-    }
-
-    private func registerCarbonIfNeeded(reason: String) {
-        guard !suspendedForPanel else {
-            HotKeyTrace.line("carbon register skipped (suspended) reason=\(reason)")
+        guard AXIsProcessTrusted() else {
+            eventTapActive = false
             return
         }
-        guard hotKeyRef == nil else {
-            HotKeyTrace.line("carbon register skipped (already live) reason=\(reason)")
+
+        let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
+        let userInfo = Unmanaged.passUnretained(self).toOpaque()
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: hotKeyCGEventCallback,
+            userInfo: userInfo
+        ) else {
+            eventTapActive = false
+            HotKeyTrace.important("CGEvent tapCreate failed")
             return
         }
-        registrationFailureMessage = nil
-        guard shortcut.isValid else {
-            registrationFailureMessage = "快捷键无效：请至少包含一个修饰键（⌘ / ⌥ / ⌃ / ⇧）。"
-            return
-        }
-        var hotKeyID = EventHotKeyID(signature: Self.signature, id: Self.hotKeyID)
-        var ref: EventHotKeyRef?
-        let status = RegisterEventHotKey(
-            shortcut.keyCode,
-            shortcut.carbonModifiers,
-            hotKeyID,
-            GetEventDispatcherTarget(),
-            0,
-            &ref
-        )
-        if status == noErr, let ref {
-            hotKeyRef = ref
-            HotKeyTrace.line("carbon RegisterEventHotKey OK reason=\(reason)")
-        } else {
-            hotKeyRef = nil
-            registrationFailureMessage =
-                "Carbon 快捷键 \(shortcut.displayString) 注册失败（\(status)）。"
-            HotKeyTrace.line("carbon RegisterEventHotKey FAIL status=\(status) reason=\(reason)")
-        }
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+        eventTap = tap
+        eventTapSource = source
+        eventTapActive = true
+        HotKeyTrace.important("CGEvent tap installed (primary hotkey path)")
     }
 
-    private func unregisterCarbon(reason: String) {
-        if let hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
-            self.hotKeyRef = nil
-            HotKeyTrace.line("carbon UnregisterEventHotKey reason=\(reason)")
+    private func removeEventTap() {
+        if let eventTap {
+            CGEvent.tapEnable(tap: eventTap, enable: false)
+            if let eventTapSource {
+                CFRunLoopRemoveSource(CFRunLoopGetMain(), eventTapSource, .commonModes)
+            }
         }
+        eventTap = nil
+        eventTapSource = nil
+        eventTapActive = false
+    }
+
+    fileprivate func handleCGKeyDown(_ event: CGEvent) -> Bool {
+        let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
+        guard keyCode == shortcut.keyCode else { return false }
+        if event.getIntegerValueField(.keyboardEventAutorepeat) != 0 { return false }
+
+        var mods: NSEvent.ModifierFlags = []
+        let flags = event.flags
+        if flags.contains(.maskCommand) { mods.insert(.command) }
+        if flags.contains(.maskShift) { mods.insert(.shift) }
+        if flags.contains(.maskAlternate) { mods.insert(.option) }
+        if flags.contains(.maskControl) { mods.insert(.control) }
+        guard mods == shortcut.cocoaModifierFlags else { return false }
+        return handleChord(source: "cgevent")
+    }
+
+    fileprivate func reenableTapAfterSystemDisable() {
+        HotKeyTrace.line("CGEvent tap re-enable after system disable")
+        installEventTapIfNeeded()
     }
 
     // MARK: - NSEvent monitors
@@ -289,16 +219,7 @@ final class GlobalHotKeyManager: ObservableObject {
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             return MainActor.assumeIsolated {
-                // Trace near-misses so we can see delivery when Carbon is mute.
-                let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
-                if UInt32(event.keyCode) == self.shortcut.keyCode || mods == self.shortcut.cocoaModifierFlags {
-                    HotKeyTrace.line(
-                        "local keyDown key=\(event.keyCode) mods=\(mods.rawValue) match=\(self.eventMatchesShortcut(event)) suspended=\(self.suspendedForPanel)"
-                    )
-                }
                 guard self.eventMatchesShortcut(event) else { return event }
-                // While suspended, ⇧⌘V should still toggle (close) via local/global —
-                // carbon is intentionally off for paste ⌘V.
                 _ = self.handleChord(source: "local")
                 return nil
             }
@@ -308,14 +229,10 @@ final class GlobalHotKeyManager: ObservableObject {
             guard let self else { return }
             MainActor.assumeIsolated {
                 guard self.eventMatchesShortcut(event) else { return }
-                HotKeyTrace.line("global keyDown match (AX delivering)")
                 _ = self.handleChord(source: "global")
             }
         }
-
-        HotKeyTrace.line(
-            "monitors local=\(localMonitor != nil) global=\(globalMonitor != nil) (global/CGEvent need Accessibility)"
-        )
+        HotKeyTrace.line("monitors local=\(localMonitor != nil) global=\(globalMonitor != nil)")
     }
 
     private func removeEventMonitors() {
@@ -329,69 +246,82 @@ final class GlobalHotKeyManager: ObservableObject {
         }
     }
 
-    // MARK: - CGEvent tap
+    // MARK: - Carbon backup
 
-    private func installEventTapIfPossible() {
-        if eventTap != nil { return }
-        guard AXIsProcessTrusted() else {
-            HotKeyTrace.line("cgevent tap skipped — Accessibility not trusted")
-            return
-        }
-        let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
-        let userInfo = Unmanaged.passUnretained(self).toOpaque()
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap,
-            eventsOfInterest: mask,
-            callback: hotKeyCGEventCallback,
-            userInfo: userInfo
-        ) else {
-            HotKeyTrace.line("cgevent tapCreate failed")
-            return
-        }
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
-        eventTap = tap
-        eventTapSource = source
-        HotKeyTrace.line("cgevent tap installed")
+    private func persist(_ value: HotKeyShortcut) {
+        UserDefaults.standard.set(Int(value.keyCode), forKey: Self.defaultsKeyCode)
+        UserDefaults.standard.set(Int(value.carbonModifiers), forKey: Self.defaultsModifiers)
     }
 
-    private func removeEventTap() {
-        if let eventTap {
-            CGEvent.tapEnable(tap: eventTap, enable: false)
-            if let eventTapSource {
-                CFRunLoopRemoveSource(CFRunLoopGetMain(), eventTapSource, .commonModes)
-            }
-            self.eventTap = nil
-            self.eventTapSource = nil
+    private func installCarbonHandlerIfNeeded() {
+        guard !carbonHandlerInstalled else { return }
+        var specs = [
+            EventTypeSpec(
+                eventClass: OSType(kEventClassKeyboard),
+                eventKind: UInt32(kEventHotKeyPressed)
+            ),
+        ]
+        let status = InstallEventHandler(
+            GetEventDispatcherTarget(),
+            hotKeyCarbonCallback,
+            1,
+            &specs,
+            Unmanaged.passUnretained(self).toOpaque(),
+            &carbonHandlerRef
+        )
+        carbonHandlerInstalled = (status == noErr)
+        HotKeyTrace.line("carbon handler status=\(status)")
+    }
+
+    fileprivate func handleCarbonPressed(id: EventHotKeyID) {
+        guard id.signature == Self.carbonSignature, id.id == Self.carbonHotKeyID else { return }
+        _ = handleChord(source: "carbon")
+    }
+
+    private func registerCarbonBackup() {
+        unregisterCarbon()
+        registrationFailureMessage = nil
+        guard shortcut.isValid else {
+            registrationFailureMessage = "快捷键无效：请至少包含一个修饰键（⌘ / ⌥ / ⌃ / ⇧）。"
+            return
+        }
+        var id = EventHotKeyID(signature: Self.carbonSignature, id: Self.carbonHotKeyID)
+        var ref: EventHotKeyRef?
+        let status = RegisterEventHotKey(
+            shortcut.keyCode,
+            shortcut.carbonModifiers,
+            id,
+            GetEventDispatcherTarget(),
+            0,
+            &ref
+        )
+        if status == noErr, let ref {
+            carbonRef = ref
+            HotKeyTrace.line("carbon backup registered")
+        } else {
+            carbonRef = nil
+            registrationFailureMessage =
+                "Carbon 备份注册失败（\(status)）。请确保已授权辅助功能以使用主路径。"
+            HotKeyTrace.line("carbon backup FAIL status=\(status)")
         }
     }
 
-    fileprivate func handleCGKeyDown(_ event: CGEvent) -> Bool {
-        let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
-        guard keyCode == shortcut.keyCode else { return false }
-        if event.getIntegerValueField(.keyboardEventAutorepeat) != 0 { return false }
-        var mods: NSEvent.ModifierFlags = []
-        let flags = event.flags
-        if flags.contains(.maskCommand) { mods.insert(.command) }
-        if flags.contains(.maskShift) { mods.insert(.shift) }
-        if flags.contains(.maskAlternate) { mods.insert(.option) }
-        if flags.contains(.maskControl) { mods.insert(.control) }
-        guard mods == shortcut.cocoaModifierFlags else { return false }
-        return handleChord(source: "cgevent")
+    private func unregisterCarbon() {
+        if let carbonRef {
+            UnregisterEventHotKey(carbonRef)
+            self.carbonRef = nil
+        }
     }
 }
 
-private func hotKeyEventCallback(
+// MARK: - C callbacks
+
+private func hotKeyCarbonCallback(
     nextHandler: EventHandlerCallRef?,
     theEvent: EventRef?,
     userData: UnsafeMutableRawPointer?
 ) -> OSStatus {
-    guard let theEvent, let userData else {
-        return OSStatus(eventNotHandledErr)
-    }
+    guard let theEvent, let userData else { return OSStatus(eventNotHandledErr) }
     var hotKeyID = EventHotKeyID()
     let err = GetEventParameter(
         theEvent,
@@ -404,9 +334,7 @@ private func hotKeyEventCallback(
     )
     guard err == noErr else { return err }
     let manager = Unmanaged<GlobalHotKeyManager>.fromOpaque(userData).takeUnretainedValue()
-    MainActor.assumeIsolated {
-        manager.handleCarbonPressed(id: hotKeyID)
-    }
+    MainActor.assumeIsolated { manager.handleCarbonPressed(id: hotKeyID) }
     return noErr
 }
 
@@ -416,31 +344,26 @@ private func hotKeyCGEventCallback(
     event: CGEvent,
     userInfo: UnsafeMutableRawPointer?
 ) -> Unmanaged<CGEvent>? {
-    guard let userInfo else {
-        return Unmanaged.passUnretained(event)
-    }
+    guard let userInfo else { return Unmanaged.passUnretained(event) }
+
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
         let manager = Unmanaged<GlobalHotKeyManager>.fromOpaque(userInfo).takeUnretainedValue()
         DispatchQueue.main.async {
-            MainActor.assumeIsolated { manager.reregister() }
+            MainActor.assumeIsolated { manager.reenableTapAfterSystemDisable() }
         }
         return Unmanaged.passUnretained(event)
     }
-    guard type == .keyDown else {
-        return Unmanaged.passUnretained(event)
-    }
+    guard type == .keyDown else { return Unmanaged.passUnretained(event) }
+
     let manager = Unmanaged<GlobalHotKeyManager>.fromOpaque(userInfo).takeUnretainedValue()
     var handled = false
+    let run = {
+        MainActor.assumeIsolated { handled = manager.handleCGKeyDown(event) }
+    }
     if Thread.isMainThread {
-        MainActor.assumeIsolated {
-            handled = manager.handleCGKeyDown(event)
-        }
+        run()
     } else {
-        DispatchQueue.main.sync {
-            MainActor.assumeIsolated {
-                handled = manager.handleCGKeyDown(event)
-            }
-        }
+        DispatchQueue.main.sync(execute: run)
     }
     return handled ? nil : Unmanaged.passUnretained(event)
 }

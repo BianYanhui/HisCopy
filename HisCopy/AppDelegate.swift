@@ -30,6 +30,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.toggleHistoryPanel()
         }
         hotKeys.start()
+        // Reliable ⇧⌘V needs Accessibility (CGEvent tap). Prompt once if missing.
+        if !PasteController.shared.isAccessibilityTrusted {
+            GlobalHotKeyManager.shared.refreshAccessibilityDependentPaths(prompt: true)
+        }
         refreshHotKeyMenuPresentation()
 
         NotificationCenter.default.addObserver(
@@ -199,6 +203,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.refreshHotKeyMenuPresentation()
             }
             .store(in: &cancellables)
+        manager.$eventTapActive
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.refreshHotKeyMenuPresentation()
+            }
+            .store(in: &cancellables)
+        PasteController.shared.$isAccessibilityTrusted
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.refreshHotKeyMenuPresentation()
+            }
+            .store(in: &cancellables)
     }
 
     private func refreshHotKeyMenuPresentation() {
@@ -215,11 +231,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let hotKeyStatusMenuItem {
             if let failure = manager.registrationFailureMessage {
                 hotKeyStatusMenuItem.title = "⚠️ \(failure)"
-                hotKeyStatusMenuItem.isHidden = false
+            } else if !PasteController.shared.isAccessibilityTrusted || !manager.eventTapActive {
+                hotKeyStatusMenuItem.title = "⚠️ 全局快捷键需辅助功能（\(shortcut.displayString)）"
             } else {
                 hotKeyStatusMenuItem.title = "全局快捷键：\(shortcut.displayString)"
-                hotKeyStatusMenuItem.isHidden = false
             }
+            hotKeyStatusMenuItem.isHidden = false
         }
     }
 
@@ -275,8 +292,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 粘贴路径必须立刻收起，避免焦点交还竞态；Esc/热键/点外部可短 fade。
         guard animated, window.isVisible else {
             finish()
-            GlobalHotKeyManager.shared.forceRecoverCarbon(reason: "undocked-hide")
-            GlobalHotKeyManager.shared.reregister()
             return
         }
         NSAnimationContext.runAnimationGroup({ ctx in
@@ -285,8 +300,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.animator().alphaValue = 0
         }, completionHandler: {
             finish()
-            GlobalHotKeyManager.shared.forceRecoverCarbon(reason: "undocked-hide-animated")
-            GlobalHotKeyManager.shared.reregister()
         })
     }
 
@@ -352,7 +365,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Do NOT call NSApp.activate / makeKeyAndOrderFront.
         installPanelDismissMonitors()
         NotificationCenter.default.post(name: .hisCopyHistoryPanelDidOpen, object: nil)
-        HotKeyTrace.line("undocked present NO makeKey keyWin=\(NSApp.keyWindow?.title ?? "nil")")
+        HotKeyTrace.line("undocked present (no makeKey)")
     }
 
     /// Esc 与点击外部关闭面板（再次 ⇧⌘V / 粘贴成功另有路径）。

@@ -6,6 +6,7 @@ struct SettingsView: View {
     @ObservedObject private var updater = AppUpdater.shared
     @ObservedObject private var store = ClipboardHistoryStore.shared
     @ObservedObject private var pasteController = PasteController.shared
+    @ObservedObject private var hotKeys = GlobalHotKeyManager.shared
     @ObservedObject private var presentation = PanelPresentation.shared
 
     /// Always in-range for the current unit — Stepper crashes if value ∉ `in:`.
@@ -100,14 +101,21 @@ struct SettingsView: View {
                 }
                 Button("重新检查权限") {
                     _ = pasteController.refreshAccessibilityStatus(prompt: false)
+                    GlobalHotKeyManager.shared.refreshAccessibilityDependentPaths(prompt: false)
                 }
                 Button("请求系统授权对话框…") {
                     _ = pasteController.refreshAccessibilityStatus(prompt: true)
+                    GlobalHotKeyManager.shared.refreshAccessibilityDependentPaths(prompt: true)
+                }
+                LabeledContent("全局快捷键监听") {
+                    Text(hotKeys.eventTapActive ? "CGEvent 已启用" : "未启用（需辅助功能）")
+                        .foregroundStyle(hotKeys.eventTapActive ? Color.secondary : Color.orange)
+                        .font(.callout)
                 }
             } header: {
                 Label("粘贴", systemImage: "doc.on.clipboard.fill")
             } footer: {
-                Text("一键粘贴用 Accessibility / CGEvent 模拟 ⌘V。状态针对「当前正在运行的这份」HisCopy：ad-hoc 更新后请删除列表中所有 HisCopy 再重新添加当前 .app。未授权时全局热键监听与 CGEvent 热键回退不可用，仅靠 Carbon；粘贴仍会尝试发送 ⌘V。")
+                Text("粘贴与全局快捷键都依赖辅助功能（本进程）。ad-hoc 更新后系统列表里勾选的可能是旧二进制：请删除所有 HisCopy 条目，再「+」添加当前 .app，然后点「重新检查权限」。未授权时快捷键不可靠；粘贴仍会尝试发送 ⌘V。")
             }
 
             Section {
@@ -149,7 +157,7 @@ struct SettingsView: View {
             } header: {
                 Label("全局快捷键", systemImage: "keyboard")
             } footer: {
-                Text("默认 ⇧⌘V。吸附模式面板永不成为 key（对齐 Pulse），避免 Carbon 热键失效；关闭后面强制恢复注册。⌘V 纯文本在吸附模式下请点按钮或先点面板（不吸附可点进搜索）。全局监听/CGEvent 需辅助功能。诊断：~/Library/Logs/HisCopy/hotkey.log")
+                Text("默认 ⇧⌘V。全局快捷键主路径为 CGEvent 监听，需要「辅助功能」授权本进程；未授权时可能不可靠。吸附面板不成为 key（对齐 Pulse）。⌘V 纯文本在吸附模式下请点按钮；↩ 仍可用。")
             }
 
             Section {
@@ -197,7 +205,7 @@ struct SettingsView: View {
             } header: {
                 Label("更新", systemImage: "arrow.triangle.2.circlepath")
             } footer: {
-                Text("从 GitHub Releases 检查并下载 HisCopy.zip。热键诊断日志：~/Library/Logs/HisCopy/hotkey.log（每次 ⇧⌘V 都会追加一行；若 Console 无输出可 cat 该文件）。")
+                Text("从 GitHub Releases 检查并下载 HisCopy.zip。详细热键日志：defaults write … HisCopy.debugHotkeys -bool true 后见 ~/Library/Logs/HisCopy/hotkey.log。")
             }
         }
         .formStyle(.grouped)
@@ -205,10 +213,10 @@ struct SettingsView: View {
         .onAppear {
             // Normalize before first paint so Stepper `in:` always contains value.
             store.setRetentionAgeUnit(store.retentionAgeUnit)
-            // Prompt once from Settings so CGEvent/global hotkey fallbacks can attach.
-            _ = pasteController.refreshAccessibilityStatus(prompt: !pasteController.isAccessibilityTrusted)
+            let needPrompt = !pasteController.isAccessibilityTrusted
+            _ = pasteController.refreshAccessibilityStatus(prompt: needPrompt)
+            GlobalHotKeyManager.shared.refreshAccessibilityDependentPaths(prompt: needPrompt)
             launchAtLogin.refresh()
-            GlobalHotKeyManager.shared.reregister()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             launchAtLogin.refresh()
