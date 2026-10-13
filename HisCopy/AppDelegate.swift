@@ -118,7 +118,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let image = statusImage(paused: ClipboardHistoryStore.shared.isPaused)
             image?.isTemplate = true
             button.image = image
-            button.toolTip = "HisCopy"
+            let ver = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+            let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+            button.toolTip = "HisCopy \(ver) (\(build))"
         }
 
         let menu = NSMenu()
@@ -128,6 +130,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         historyItem.target = self
         menu.addItem(historyItem)
         historyMenuItem = historyItem
+
+        let ver = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        let versionItem = NSMenuItem(title: "HisCopy \(ver) (\(build))", action: nil, keyEquivalent: "")
+        versionItem.isEnabled = false
+        menu.addItem(versionItem)
 
         let hotKeyStatus = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         hotKeyStatus.isEnabled = false
@@ -241,7 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let visible = historyWindow?.isVisible == true
-        NSLog("[HisCopy] undocked toggle visible=%@", visible ? "YES" : "NO")
+        HotKeyTrace.line("undocked toggle visible=\(visible)")
         if visible {
             hideHistoryPanel()
             return

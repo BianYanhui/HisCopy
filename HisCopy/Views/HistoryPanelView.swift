@@ -583,69 +583,72 @@ private struct HistoryRow: View {
 }
 
 
-/// Local key monitor so ↑/↓ (and numpad 8/2) move selection without clicking the list.
-/// Borderless `NSPanel` + unfocused search leaves no List first-responder; this fills the gap.
+/// Key monitor so ↑/↓ (and numpad 8/2) / 1–9 work without clicking the list.
+/// Local + global: docked hotkey open no longer makes the berth key (v0.8.4).
 @MainActor
 private final class PanelListArrowKeyMonitor: ObservableObject {
     var searchFocused = false
-    private var monitor: Any?
+    private var localMonitor: Any?
+    private var globalMonitor: Any?
 
     func start() {
         stop()
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
-            guard !self.searchFocused else { return event }
-
-            // Panel may be key without HisCopy being the active app (.nonactivatingPanel).
-            guard let key = NSApp.keyWindow,
-                  key.isVisible,
-                  key.title == "HisCopy" else {
-                return event
-            }
-
-            // Let real text editing keep arrow keys (e.g. if focus leaked to a field).
-            if let fr = key.firstResponder {
-                if fr is NSTextView || fr is NSTextField {
-                    return event
-                }
-            }
-
-            // Ignore when Command/Option/Control held; allow bare arrows (and fn/numpad bits).
-            let chord = event.modifierFlags.intersection([.command, .option, .control, .shift])
-            guard chord.isEmpty else { return event }
-
-            // 1–9 (main row or keypad): quick paste of the Nth row.
-            if let digit = Self.quickPickIndex(for: event.keyCode) {
-                NotificationCenter.default.post(
-                    name: .hisCopyPanelQuickPick,
-                    object: nil,
-                    userInfo: ["index": digit]
-                )
-                return nil
-            }
-
-            let delta: Int
-            switch event.keyCode {
-            case 125: delta = 1   // ↓
-            case 126: delta = -1  // ↑
-            case 84:  delta = 1   // keypad 2
-            case 91:  delta = -1  // keypad 8
-            default:
-                return event
-            }
-            NotificationCenter.default.post(
-                name: .hisCopyPanelMoveSelection,
-                object: nil,
-                userInfo: ["delta": delta]
-            )
-            return nil
+            return self.handle(event, swallow: true)
+        }
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return }
+            _ = self.handle(event, swallow: false)
         }
     }
 
+    /// - Parameter swallow: local monitors can eat the event; global cannot.
+    private func handle(_ event: NSEvent, swallow: Bool) -> NSEvent? {
+        guard !searchFocused else { return event }
+        guard let panel = Self.historyPanelWindow() else { return event }
+
+        if let fr = panel.firstResponder, fr is NSTextView || fr is NSTextField {
+            return event
+        }
+
+        let chord = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if chord.isEmpty, let digit = Self.quickPickIndex(for: event.keyCode) {
+            NotificationCenter.default.post(
+                name: .hisCopyPanelQuickPick,
+                object: nil,
+                userInfo: ["index": digit]
+            )
+            return swallow ? nil : event
+        }
+
+        guard chord.isEmpty else { return event }
+
+        let delta: Int
+        switch event.keyCode {
+        case 125: delta = 1   // ↓
+        case 126: delta = -1  // ↑
+        case 84:  delta = 1   // keypad 2
+        case 91:  delta = -1  // keypad 8
+        default:
+            return event
+        }
+        NotificationCenter.default.post(
+            name: .hisCopyPanelMoveSelection,
+            object: nil,
+            userInfo: ["delta": delta]
+        )
+        return swallow ? nil : event
+    }
+
     func stop() {
-        if let monitor {
-            NSEvent.removeMonitor(monitor)
-            self.monitor = nil
+        if let localMonitor {
+            NSEvent.removeMonitor(localMonitor)
+            self.localMonitor = nil
+        }
+        if let globalMonitor {
+            NSEvent.removeMonitor(globalMonitor)
+            self.globalMonitor = nil
         }
     }
 
@@ -655,12 +658,21 @@ private final class PanelListArrowKeyMonitor: ObservableObject {
         return map[keyCode]
     }
 
-    deinit {
-        if let monitor {
-            NSEvent.removeMonitor(monitor)
+    private static func historyPanelWindow() -> NSWindow? {
+        if let key = NSApp.keyWindow, key.title == "HisCopy", key.isVisible,
+           !(key is SliverPanel) { return key }
+        return NSApp.windows.first {
+            $0.title == "HisCopy" && $0.isVisible && !($0 is SliverPanel)
         }
     }
+
+    deinit {
+        if let localMonitor { NSEvent.removeMonitor(localMonitor) }
+        if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
+    }
 }
+
+
 
 extension Notification.Name {
     /// 1–9 pressed on the panel (userInfo["index"] = 0…8).

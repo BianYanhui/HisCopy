@@ -178,11 +178,9 @@ final class DockedPanelController {
     /// spring with `isOpen == false`.
     func toggleFromHotKey() {
         let showing = isBerthShowing
-        NSLog("[HisCopy] docked toggleFromHotKey showing=%@ state=%@ visible=%@ isOpen=%@",
-              showing ? "YES" : "NO",
-              String(describing: state),
-              (window?.isVisible == true) ? "YES" : "NO",
-              model.isOpen ? "YES" : "NO")
+        HotKeyTrace.line(
+            "docked toggle showing=\(showing) state=\(state) visible=\(window?.isVisible == true) isOpen=\(model.isOpen)"
+        )
         if showing {
             retract()
         } else {
@@ -239,13 +237,14 @@ final class DockedPanelController {
         state = .open
         outsideSince = nil
         showBerth()
+        // v0.8.4: Pulse keeps canBecomeKey false and only orderFrontRegardless.
+        // makeKeyAndOrderFront after the first open was correlated with Carbon
+        // Pressed going silent. Expand without taking key; arrows / ⌘V / Return /
+        // 1–9 use monitors + temporary Carbon paste hotkeys. Clicking the list
+        // or search still makes the panel key (canBecomeKey remains true).
         if fromHotKey {
-            window.makeKeyAndOrderFront(nil)
-            if let content = window.contentView { _ = window.makeFirstResponder(content) }
-            DispatchQueue.main.async {
-                window.makeKeyAndOrderFront(nil)
-                if let content = window.contentView { _ = window.makeFirstResponder(content) }
-            }
+            window.orderFrontRegardless()
+            HotKeyTrace.line("docked open fromHotKey (no makeKey) frame=\(NSStringFromRect(window.frame))")
         }
         installDismissMonitors?()
         if wasCollapsed {

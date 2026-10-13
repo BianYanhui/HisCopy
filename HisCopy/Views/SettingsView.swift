@@ -149,7 +149,7 @@ struct SettingsView: View {
             } header: {
                 Label("全局快捷键", systemImage: "keyboard")
             } footer: {
-                Text("默认 ⇧⌘V（Shift+Command+V）：不吸附时面板显示在屏幕正中，吸附时从边缘弹出。使用系统 Carbon RegisterEventHotKey，改后立即生效。仅打开面板通常无需辅助功能权限；模拟 ⌘V 粘贴才需要。菜单栏图标使用常规菜单。")
+                Text("默认 ⇧⌘V。v0.8.4 起同时使用 Carbon + 全局/本地按键监听 +（已授权辅助功能时）CGEvent 监听，避免面板成为 key 后热键失效。粘贴模拟 ⌘V 仍需辅助功能。诊断：~/Library/Logs/HisCopy/hotkey.log")
             }
 
             Section {
@@ -197,7 +197,7 @@ struct SettingsView: View {
             } header: {
                 Label("更新", systemImage: "arrow.triangle.2.circlepath")
             } footer: {
-                Text("从 GitHub Releases 检查并下载 HisCopy.zip。")
+                Text("从 GitHub Releases 检查并下载 HisCopy.zip。热键诊断日志：~/Library/Logs/HisCopy/hotkey.log（每次 ⇧⌘V 都会追加一行；若 Console 无输出可 cat 该文件）。")
             }
         }
         .formStyle(.grouped)
