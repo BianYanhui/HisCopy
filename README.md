@@ -1,61 +1,60 @@
 # HisCopy
 
-菜单栏剪贴板历史工具（macOS）。**v0.8.8** 稳定代码签名（辅助功能跨更新保留）；**v0.8.7** 热键路径清理（CGEvent 主路径）；**v0.8.6** 吸附面板永不 makeKey；**v0.8.5** Carbon 热键与粘贴热键互斥恢复；**v0.8.4** 热键三通道回退；**v0.8.3** 热键可靠反复开关；**v0.8.2** 热键可反复开关；**v0.8.1** 细节打磨；**v0.8.0** 屏幕边缘吸附 + 改用 Pulse 视觉风格；**v0.7.2** 非激活面板 + 修正辅助功能误判；**v0.7.1** 修复历史面板打开后粘贴焦点被抢走；**v0.7.0** 全面打磨历史面板与设置，达到接近 Paste/Pulse 的成品级质感；**v0.6.1** 修复设置与方向键；**v0.6.0** 起支持可配置容量/时长保留与收藏；全局快捷键 ⇧⌘V 在屏幕正中呼出历史；选中后 **⌘V** 粘贴纯文本、**回车** 粘贴有格式原文；以及本地历史与 GitHub Releases 应用内更新。
+原生 macOS 菜单栏剪切板历史 — 侧边吸附、⇧⌘V 一键呼出、丝滑动画。开源免费。
+
+[![Release](https://img.shields.io/github/v/release/BianYanhui/HisCopy?label=Release)](https://github.com/BianYanhui/HisCopy/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![macOS 13+](https://img.shields.io/badge/macOS-13%2B-black.svg)](https://github.com/BianYanhui/HisCopy/releases)
+
+**下载：** [最新 Release（HisCopy.zip）](https://github.com/BianYanhui/HisCopy/releases/latest) · 当前 **v0.8.8**
+
+<p align="center">
+  <img src="docs/media/panel-open.jpg" alt="HisCopy 侧边面板打开" width="720">
+</p>
+
+| ⇧⌘V 热键呼出 | 侧边呼出 |
+|:---:|:---:|
+| <img src="docs/media/hotkey-open.gif" alt="⇧⌘V 呼出面板" width="360"> | <img src="docs/media/side-reveal.gif" alt="侧边呼出" width="360"> |
+
+> 吸附模式下，鼠标移近边缘也会弹簧滑出面板（与热键相同的开合动画）。上方右侧 GIF 取自二次打开/滑出片段。
+
+<p align="center">
+  <img src="docs/media/panel-list-preview.jpg" alt="历史列表与预览" width="280">
+  &nbsp;
+  <img src="docs/media/paste-buttons.jpg" alt="纯文本 / 粘贴原文" width="280">
+</p>
+
+竖屏宣传片（小红书风）：[`docs/media/promo-xhs.mp4`](docs/media/promo-xhs.mp4)
+
+---
 
 ## 功能
 
-- **稳定代码签名**（v0.8.8）：Release 使用持久自签证书 `HisCopy Self-Signed`（见 [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md)）。切换到此签名后需**一次性**重新授权辅助功能；之后更新一般无需再勾选。缺失 CI 密钥时回退 ad-hoc。
-- **热键架构清理**（v0.8.7）：全局快捷键以辅助功能下的 CGEvent tap 为主，NSEvent 监听为辅，Carbon 仅作备份；去掉心跳/强制恢复等调试残留；吸附仍不 makeKey
-- **吸附永不 makeKey**（v0.8.6）：v0.8.5 去掉粘贴 ⌘V 后 Carbon 仍在首次 makeKey 后死亡。对齐 Pulse：`DockedHistoryPanel.canBecomeKey = false`，只 `orderFrontRegardless`；关闭后 `forceRecoverCarbon`；2s heartbeat 写 hotkey.log
-- **Carbon 热键复活**（v0.8.5）：根因是面板打开时 `PanelPasteHotKeys` 注册的 ⌘V 与打开热键 ⇧⌘V 同键码并存，毁掉 Carbon；此后 reregister 显示 OK 但 Pressed 永不再来。改为粘贴侧只 Carbon 注册 Return，⌘V 走本地监听；打开热键注册一次保持到改快捷键为止
-- **热键三通道回退**（v0.8.4）：Carbon + 本地/全局 NSEvent 监听 +（辅助功能授权后）CGEvent session tap；吸附热键打开不再 makeKey（对齐 Pulse）；诊断写入 `~/Library/Logs/HisCopy/hotkey.log`
-- **热键 GetEventDispatcherTarget**（v0.8.3）：根因是 Carbon 热键挂在 `GetApplicationEventTarget`，吸附面板成为 key 后后续 Pressed 不再送达；改为与 Pulse 相同的 `GetEventDispatcherTarget`，去掉 Released 闩锁，改用 300ms 时间戳防抖，关闭后面重新注册。v0.8.2 的「清抑制旗标」治标未治本
-- **热键清旗标尝试**（v0.8.2）：修复吸附面板首次 ⇧⌘V 后再次热键无响应。根因是 Carbon `kEventHotKeyReleased` 在 nonactivating 面板成为 key 后常丢失，抑制旗标卡住；改为轮询真实按键状态清旗标，并在开关面板后自愈
-- **细节打磨**（v0.8.1）：真正的开机启动（系统登录项 SMAppService，显示实际状态，需批准时引导打开「登录项」）；复制与历史中任一条相同的内容时把该条移到最前（保留收藏），不再重复；吸附模式粘贴时焦点交还无闪烁；收起的细条可直接拖动换位置（悬停稍停才展开，按下即拖动）；顶部吸附避开刘海与菜单栏（含自动隐藏菜单栏）；选中项预览（图片 / 全文 / 文件列表，眼睛按钮可关）；重新设计空历史与无搜索结果状态
-- **屏幕边缘吸附 + Pulse 风格**（v0.8.0）：设置 → 面板 →「吸附 / 不吸附」。吸附时面板收为左 / 右 / 顶部边缘的一条细条，鼠标移近即弹簧滑出、移开收回；⇧⌘V 从边缘弹出；拖动标题沿边缘移动或换边、换屏幕，位置按显示器 UUID 记住（显示器拔掉时回落到当前屏幕）。前 9 条显示 1–9 序号，按数字直接粘贴原文。面板外观（黑色 / 浅色 / 玻璃）、字体、配色、间距、动画与吸附形状直接取自 [Pulse](https://github.com/qunqin24/Pulse)（Apache-2.0，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)）；不使用 Pulse 的名称、标志或图标
-- **非激活面板与辅助功能误判**（v0.7.2）：历史面板改用 `nonactivatingPanel`，不再 `NSApp.activate`，原对话框保持系统焦点；用 Carbon 临时热键处理 ⌘V/回车。修正 ad-hoc 签名下 `AXIsProcessTrusted` 假阴性：设置页标明「本进程」状态并提示清理陈旧 TCC；**粘贴路径不再因信任布尔提前放弃**，始终尝试 CGEvent ⌘V
-- **粘贴焦点恢复**（v0.7.1）：打开历史面板前记住前置应用与（尽力）AX 焦点元素；⌘V / 回车粘贴前先收起面板、重新激活目标应用并等到其真正前置，再合成 ⌘V，避免粘贴落入 HisCopy 或对话框丢焦
-- **UI 成品打磨**（v0.7.0）：更密更干净的历史行、选中/hover 强调井与 1.06 缩放、状态指示点、搜索框 ⌘F 键帽提示、收藏星标悬停显现与选中态一体、页眉/搜索/页脚同一水平节奏、设置分组 SF Symbol 与快捷键录制键帽字段；思路参考 [Pulse](https://github.com/qunqin24/Pulse)（Apache-2.0）
-- **全局快捷键**：默认 **⇧⌘V**（Shift+Command+V）呼出/隐藏历史面板，**面板居中显示**；可在设置中修改。基于 Carbon `RegisterEventHotKey`（零第三方依赖）。菜单栏图标为常规菜单（暂停/设置/退出等）
-- **保留策略**（v0.6.0+）：设置中可配置**存储上限**（10–500 MB 预设）与**保留时长**（3 天–3 个月，天/周/月刻度）。超出时丢弃最旧的非收藏条目；用量按 JSON 载荷 + `Application Support/HisCopy/media/` 估算
-- **收藏**（v0.6.0+）：历史行星标 / 右键菜单收藏；收藏条目免于容量与时长自动清理（「清空」仍会删除全部）
-- **搜索焦点**（v0.6.0+）：⇧⌘V 打开面板时选中最新且**不**进入搜索框，方向键可立即导航；**⌘F** 聚焦搜索；Esc 先退出搜索/清空查询，再关闭面板
-- **设置与方向键修复**（v0.6.1）：设置窗口改为自建 titled window，保留时长 Stepper 绑定始终落在合法区间，避免打开即崩；面板打开后本地键监控立即响应 ↑/↓（含小键盘），无需先点击列表
-- **Pulse 启发 UI**（v0.5.0+）：更丝滑的面板弹簧出现与淡出关闭、选中高亮井、行 hover 浅洗、连续圆角与间距层级、页脚键帽快捷键提示；仍为零第三方 SwiftUI/AppKit，保持苹果原生质感（思路参考 [Pulse](https://github.com/qunqin24/Pulse)，未抄袭其源码）
-- **面板视觉打磨**（v0.5.1）：borderless 无交通灯；regularMaterial + 中性 scrim 消除右侧色带 bleed；自定义顶栏/搜索；底栏键帽嵌按钮、对齐更疏；行元数据对比度提升
-- **呼出热键竞态修复**（v0.4.1+）：⇧⌘V 打开面板后，需等修饰键与 V 全部松开才启用面板内 ⌘V / 回车，避免误粘贴
-- **松手保持打开**（v0.4.2）：全局热键只在 keyDown toggle、忽略 keyUp；不再把同一快捷键挂到菜单 keyEquivalent；Gate 解锁不关面板。Esc / 点外部 / 再次热键 / 粘贴成功才关闭
-- **更新不卡 UI**（v0.4.2）：下载后解压与拷贝在后台执行，主线程只弹进度；安装脚本 `nohup` 旁路，`exit(0)` 前不阻塞长 IO
-- **修复安装脚本启动**（v0.4.4）：路径经环境变量传递、Swift 侧 `nohup /bin/bash "$1"` 拉起，避免路径空格/特殊字符与 Process 启动失败导致「无法启动安装脚本」
-- **打开选中最新**（v0.4.3）：⇧⌘V 打开历史面板时默认选中并滚动到最上面最新一条；清空搜索后同样回到最新
-- **双模式粘贴**（选中一条后）：
-  - **⌘V**：写入**无格式纯文本**，用 Accessibility / `CGEvent` 向前置 App 发送 ⌘V，然后**自动关闭**面板
-  - **回车**：写入**有格式原文**（HTML/RTF 等），同样模拟 ⌘V 后关闭面板
-- **权限降级**：无辅助功能权限时仅写入剪贴板，并引导打开「系统设置 → 隐私与安全性 → 辅助功能」
-- **剪切板捕获**：轮询 `NSPasteboard.changeCount`（约 350ms），采集纯文本、HTML/RTF、图片（TIFF/PNG）、文件 URL
-- **忽略**：自身回写、以及 `org.nspasteboard.ConcealedType` / Transient / AutoGenerated（若存在）
-- **历史**：Application Support JSON + 图片文件；搜索、删除/清空、暂停捕获、收藏与可配置保留
-- **界面**：borderless 毛玻璃历史面板（无交通灯）、弹簧开合与选中/hover、键帽嵌按钮底栏、系统字体与强调色、SF Symbol、标准设置分组
-- **在线更新**：检查 GitHub Releases，下载 `HisCopy.zip`，进程退出后旁路替换 `.app`
+- **侧边吸附**：面板收为左 / 右 / 顶部边缘细条；⇧⌘V 从边缘弹出，鼠标移近亦可展开；拖动标题换边 / 换屏，位置按显示器记住
+- **全局热键**：默认 **⇧⌘V** 呼出 / 隐藏；可在设置中修改
+- **双模式粘贴**：选中后 **⌘V** 粘贴纯文本，**回车** 粘贴有格式原文；前 9 条可按数字键快速粘贴
+- **预览**：图片 / 全文 / 文件列表；眼睛按钮可关
+- **搜索与收藏**：⌘F 搜索；星标收藏免于自动清理
+- **保留策略**：可配置容量上限与保留时长
+- **开机启动**：系统登录项（`SMAppService`），设置页显示真实状态
+- **在线更新**：检查 GitHub Releases，旁路替换 `.app`
+- **稳定签名**（v0.8.8）：Release 使用持久自签证书 `HisCopy Self-Signed`，辅助功能跨更新一般可保留（见 [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md)）
+- **零第三方依赖**：纯 Swift / AppKit；面板外观灵感来自 [Pulse](https://github.com/qunqin24/Pulse)（Apache-2.0，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) / [NOTICE](NOTICE)）
 
 ## 权限说明
 
 | 能力 | 是否需要辅助功能 | 说明 |
 |------|------------------|------|
-| 全局热键呼出面板 | 通常不需要 | Carbon `RegisterEventHotKey` |
+| 全局热键呼出面板 | 通常不需要 | Carbon / CGEvent 热键路径 |
 | 菜单栏常规菜单 | 不需要 | 标准 `NSStatusItem` |
 | ⌘V / 回车一键粘贴 | **需要** | `AXIsProcessTrusted` + `CGEvent` 模拟 ⌘V |
 
-首次粘贴失败时，HisCopy 会提示并引导打开 **系统设置 → 隐私与安全性 → 辅助功能**，勾选 HisCopy。未授权前仍会把内容写入剪贴板，可手动 ⌘V。`Info.plist` 已声明中文 `NSAccessibilityUsageDescription`。
+首次粘贴失败时会引导打开 **系统设置 → 隐私与安全性 → 辅助功能**。未授权前仍会写入剪贴板，可手动 ⌘V。
 
 ## 限制
 
-- 构建为 **ad-hoc 签名、未公证**
-- 开机自启开关目前为占位（尚未接 `SMAppService`）
-
-## 下载
-
-从 [Releases](https://github.com/BianYanhui/HisCopy/releases) 或 [Actions](https://github.com/BianYanhui/HisCopy/actions) 下载 `HisCopy.zip`。
+- **未公证**；Release 为稳定自签（`HisCopy Self-Signed`，v0.8.8+）。缺失 CI 密钥时回退 ad-hoc
+- 首次换到 Self-Signed 后需**一次性**重新勾选辅助功能；之后同签名更新一般不必再勾
 
 ### 未公证打开方式
 
@@ -77,6 +76,21 @@ git tag v0.8.8
 git push origin v0.8.8
 ```
 
+## 近期版本
+
+完整变更见 [Releases](https://github.com/BianYanhui/HisCopy/releases)。
+
+| 版本 | 摘要 |
+|------|------|
+| **v0.8.8** | 稳定自签代码签名，辅助功能跨更新保留 |
+| **v0.8.7** | 热键以 CGEvent 为主路径，清理调试残留 |
+| **v0.8.6** | 吸附面板永不 `makeKey` |
+| **v0.8.5–0.8.2** | Carbon / 热键可靠性修复 |
+| **v0.8.1** | 开机启动（SMAppService）、去重、预览、吸附拖动等细节 |
+| **v0.8.0** | 屏幕边缘吸附 + Pulse 视觉风格 |
+| **v0.7.x** | 非激活面板、粘贴焦点恢复、UI 成品打磨 |
+| **v0.6.x** | 保留策略、收藏、搜索焦点 |
+
 ## License
 
 MIT
@@ -86,6 +100,5 @@ MIT
 GitHub Actions Release 使用稳定自签身份 **`HisCopy Self-Signed`**（不是每次不同的 ad-hoc）。这样系统「辅助功能」可以在版本更新后继续认同一份应用。
 
 - 细节与轮换证书：[docs/CODE_SIGNING.md](docs/CODE_SIGNING.md)
-- **首次**换到本签名后：删除辅助功能列表里所有旧 HisCopy，再添加当前 `.app`，重启应用并「重新检查权限」。
-- 之后用本仓库 CI 打出的更新包，一般不必再勾选。
-
+- **首次**换到本签名后：删除辅助功能列表里所有旧 HisCopy，再添加当前 `.app`，重启应用并「重新检查权限」
+- 之后用本仓库 CI 打出的更新包，一般不必再勾选
