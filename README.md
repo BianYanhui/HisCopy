@@ -9,14 +9,14 @@
 **下载：** [最新 Release（HisCopy.zip）](https://github.com/BianYanhui/HisCopy/releases/latest) · 当前 **v0.8.8**
 
 <p align="center">
-  <img src="docs/media/panel-open.jpg" alt="HisCopy 侧边面板打开" width="720">
+  <img src="docs/media/panel-open.jpg" alt="HisCopy 历史面板" width="720">
 </p>
 
 | ⇧⌘V 热键呼出 | 侧边呼出 |
 |:---:|:---:|
 | <img src="docs/media/hotkey-open.gif" alt="⇧⌘V 呼出面板" width="360"> | <img src="docs/media/side-reveal.gif" alt="侧边呼出" width="360"> |
 
-> 吸附模式下，鼠标移近边缘也会弹簧滑出面板（与热键相同的开合动画）。上方右侧 GIF 取自二次打开/滑出片段。
+> 吸附模式下，鼠标移近边缘也会弹簧滑出面板（与热键相同的开合动画）。上方右侧 GIF 取自二次打开/滑出片段。截图与 GIF 均只展示 HisCopy 面板（黑底），不含桌面其它窗口。
 
 <p align="center">
   <img src="docs/media/panel-list-preview.jpg" alt="历史列表与预览" width="280">
