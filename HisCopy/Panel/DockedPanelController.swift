@@ -276,6 +276,7 @@ final class DockedPanelController {
     /// window underneath is identical, so nothing visibly disappears.
     func retract() {
         guard state != .collapsed else { return }
+        SidePreviewController.shared.hide()
         if state == .open { tearDownDismissMonitors?() }
         PanelPasteShortcutGate.shared.reset()
         state = .collapsed
@@ -295,6 +296,7 @@ final class DockedPanelController {
     /// step (no hide/re-show), and the sliver window — never hidden — is what
     /// remains, so there is no flash.
     func retractForPaste() {
+        SidePreviewController.shared.hide()
         if state == .open { tearDownDismissMonitors?() }
         PanelPasteShortcutGate.shared.reset()
         state = .collapsed
