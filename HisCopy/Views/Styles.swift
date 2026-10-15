@@ -31,8 +31,11 @@ enum HisCopyStyle {
     static let headerBottomPadding: CGFloat = 10
     static let searchFieldCorner: CGFloat = 10
     static let keyCapCorner: CGFloat = 5
-    /// Selected-row preview card height (v0.8.1).
-    static let previewHeight: CGFloat = 116
+    /// Space-key side peek (v0.8.9); larger than a list row, not fullscreen.
+    static let sidePreviewWidth: CGFloat = 360
+    static let sidePreviewMinHeight: CGFloat = 320
+    static let sidePreviewGap: CGFloat = 12
+    static let sidePreviewFontSize: CGFloat = 14
     /// Pulse rail selection scale.
     static let selectionScale: CGFloat = 1.06
 
@@ -183,91 +186,6 @@ struct EmptyHistoryState: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .combine)
-    }
-}
-
-/// Preview of the selected row: image fitted, or the full text (scrollable),
-/// or the file list — on a Pulse track-fill card. Never takes first responder,
-/// so arrows, 1–9, ⌘V and Return keep working.
-struct SelectionPreview: View {
-    let item: ClipboardItem
-    @ObservedObject private var store = ClipboardHistoryStore.shared
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Text("预览")
-                    .font(HisCopyStyle.font(HisCopyStyle.footnoteFontSize, .semibold))
-                    .foregroundStyle(.primary.opacity(0.5))
-                Text(detail)
-                    .font(HisCopyStyle.font(HisCopyStyle.footnoteFontSize).monospacedDigit())
-                    .foregroundStyle(.primary.opacity(HisCopyStyle.textTertiary))
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            content(for: item)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.primary.opacity(0.06))
-        )
-        .id(item.id)
-    }
-
-    @ViewBuilder
-    private func content(for item: ClipboardItem) -> some View {
-        if item.kind == .image, let name = item.imageFileName, let image = store.loadImage(named: name) {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if item.kind == .files, let urls = item.fileURLs {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 3) {
-                    ForEach(urls, id: \.self) { raw in
-                        Text(URL(string: raw)?.path ?? raw)
-                            .font(HisCopyStyle.font(HisCopyStyle.rowFontSize))
-                            .foregroundStyle(.primary.opacity(HisCopyStyle.textStrong))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        } else {
-            ScrollView {
-                Text(previewText)
-                    .font(HisCopyStyle.font(HisCopyStyle.rowFontSize))
-                    .foregroundStyle(.primary.opacity(HisCopyStyle.textStrong))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    /// Capped so a multi-megabyte copy can't stall layout.
-    private var previewText: String {
-        let full = item.plainText ?? item.textPreview
-        return full.count > 6000 ? String(full.prefix(6000)) + "…" : full
-    }
-
-    private var detail: String {
-        switch item.kind {
-        case .image:
-            if let name = item.imageFileName, let image = store.loadImage(named: name) {
-                return "\(Int(image.size.width))×\(Int(image.size.height))"
-            }
-            return item.kindLabel
-        case .files:
-            return "\(item.fileURLs?.count ?? 0) 个文件"
-        default:
-            let text = item.plainText ?? item.textPreview
-            let lines = text.split(separator: "\n", omittingEmptySubsequences: false).count
-            return "\(text.count) 字 · \(lines) 行"
-        }
     }
 }
 

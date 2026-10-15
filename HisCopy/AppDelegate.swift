@@ -275,6 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func hideHistoryPanel(animated: Bool = true) {
+        SidePreviewController.shared.hide()
         if isDocking {
             DockedPanelController.shared.retract()
             return
@@ -384,6 +385,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         clickOutsideMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
             guard let self, let window = self.activePanelWindow, window.isVisible else { return }
             let screenPoint = NSEvent.mouseLocation
+            // Clicks on the Space side peek count as inside the panel UX.
+            if let peek = SidePreviewController.shared.windowFrame, peek.contains(screenPoint) {
+                return
+            }
             if !window.frame.contains(screenPoint) {
                 // 状态栏按钮点击留给菜单，不在这里抢。
                 if let button = self.statusItem?.button, let buttonWindow = button.window {
@@ -412,6 +417,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Hide panel for paste. With nonactivating panel, destination usually still
     /// frontmost; only restore if we somehow became active.
     func prepareForPasteToFrontmostApp(hidePanel: Bool) {
+        if hidePanel {
+            SidePreviewController.shared.hide()
+        }
         if hidePanel, isDocking {
             DockedPanelController.shared.retractForPaste()
         } else if hidePanel {

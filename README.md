@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![macOS 13+](https://img.shields.io/badge/macOS-13%2B-black.svg)](https://github.com/BianYanhui/HisCopy/releases)
 
-**下载：** [最新 Release（HisCopy.zip）](https://github.com/BianYanhui/HisCopy/releases/latest) · 当前 **v0.8.8**
+**下载：** [最新 Release（HisCopy.zip）](https://github.com/BianYanhui/HisCopy/releases/latest) · 当前 **v0.8.9**
 
 <p align="center">
   <img src="docs/media/panel-open.jpg" alt="HisCopy 历史面板" width="720">
@@ -33,7 +33,7 @@
 - **侧边吸附**：面板收为左 / 右 / 顶部边缘细条；⇧⌘V 从边缘弹出，鼠标移近亦可展开；拖动标题换边 / 换屏，位置按显示器记住
 - **全局热键**：默认 **⇧⌘V** 呼出 / 隐藏；可在设置中修改
 - **双模式粘贴**：选中后 **⌘V** 粘贴纯文本，**回车** 粘贴有格式原文；前 9 条可按数字键快速粘贴
-- **预览**：图片 / 全文 / 文件列表；眼睛按钮可关
+- **空格侧边预览**：选中条目后按 **空格** 在面板旁放大预览（再按关闭，Esc 亦关）；搜索框聚焦时空格正常输入
 - **搜索与收藏**：⌘F 搜索；星标收藏免于自动清理
 - **保留策略**：可配置容量上限与保留时长
 - **开机启动**：系统登录项（`SMAppService`），设置页显示真实状态
@@ -82,6 +82,7 @@ git push origin v0.8.8
 
 | 版本 | 摘要 |
 |------|------|
+| **v0.8.9** | 空格侧边预览（Quick Look 式开关），去掉常驻底栏预览 |
 | **v0.8.8** | 稳定自签代码签名，辅助功能跨更新保留 |
 | **v0.8.7** | 热键以 CGEvent 为主路径，清理调试残留 |
 | **v0.8.6** | 吸附面板永不 `makeKey` |

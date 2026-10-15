@@ -21,8 +21,6 @@ struct HistoryPanelView: View {
     @StateObject private var arrowKeyMonitor = PanelListArrowKeyMonitor()
     /// Debounce Carbon hotkey + local monitor both firing.
     @State private var lastPasteAt: Date?
-    /// Preview of the selected row (v0.8.1); toggled from the header.
-    @AppStorage("panel.preview.enabled") private var showsPreview = true
 
     private var filtered: [ClipboardItem] {
         store.filtered(search: searchText)
@@ -35,15 +33,6 @@ struct HistoryPanelView: View {
             insetDivider
 
             content
-
-            if showsPreview, !filtered.isEmpty, let item = selectedItem() {
-                insetDivider
-                SelectionPreview(item: item)
-                    .frame(height: HisCopyStyle.previewHeight)
-                    .padding(.horizontal, HisCopyStyle.stripHorizontalPadding)
-                    .padding(.vertical, 10)
-                    .transition(.opacity)
-            }
 
             insetDivider
 
@@ -67,9 +56,11 @@ struct HistoryPanelView: View {
         }
         .onDisappear {
             arrowKeyMonitor.stop()
+            SidePreviewController.shared.hide()
         }
         .onReceive(NotificationCenter.default.publisher(for: .hisCopyHideHistoryPanel)) { _ in
             arrowKeyMonitor.stop()
+            SidePreviewController.shared.hide()
         }
         .onReceive(NotificationCenter.default.publisher(for: .hisCopyHistoryPanelDidOpen)) { _ in
             playAppearAnimation()
@@ -77,6 +68,7 @@ struct HistoryPanelView: View {
             searchFocused = false
             arrowKeyMonitor.searchFocused = searchFocused
             arrowKeyMonitor.start()
+            SidePreviewController.shared.hide()
         }
         .onReceive(NotificationCenter.default.publisher(for: .hisCopyPanelEscapeRequested)) { _ in
             handleEscape()
@@ -96,6 +88,18 @@ struct HistoryPanelView: View {
         .onReceive(NotificationCenter.default.publisher(for: .hisCopyPanelPasteFormatted)) { _ in
             guard pasteShortcutGate.isArmed else { return }
             pasteFormattedSelected()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .hisCopyPanelToggleSpacePreview)) { _ in
+            toggleSpacePreview()
+        }
+        .onChange(of: selection) { newID in
+            guard SidePreviewController.shared.isVisible else { return }
+            if let newID, let item = filtered.first(where: { $0.id == newID })
+                ?? store.items.first(where: { $0.id == newID }) {
+                SidePreviewController.shared.update(item: item)
+            } else {
+                SidePreviewController.shared.hide()
+            }
         }
         .onExitCommand {
             handleEscape()
@@ -134,6 +138,10 @@ struct HistoryPanelView: View {
     }
 
     private func handleEscape() {
+        if SidePreviewController.shared.isVisible {
+            SidePreviewController.shared.hide()
+            return
+        }
         if searchFocused {
             searchFocused = false
             return
@@ -143,6 +151,11 @@ struct HistoryPanelView: View {
             return
         }
         NotificationCenter.default.post(name: .hisCopyHideHistoryPanel, object: nil)
+    }
+
+    /// Space toggles the side peek (Finder Quick Look style — press to show / hide).
+    private func toggleSpacePreview() {
+        SidePreviewController.shared.toggle(item: selectedItem())
     }
 
     private func playAppearAnimation() {
@@ -270,15 +283,6 @@ struct HistoryPanelView: View {
                 .labelsHidden()
                 .help(store.isPaused ? "恢复剪贴板捕获" : "暂停剪贴板捕获")
                 .accessibilityLabel(store.isPaused ? "已暂停捕获" : "捕获中")
-
-                PanelIconButton(
-                    systemName: showsPreview ? "eye" : "eye.slash",
-                    helpText: showsPreview ? "隐藏选中项预览" : "显示选中项预览"
-                ) {
-                    withAnimation(HisCopyStyle.selection) { showsPreview.toggle() }
-                }
-                .opacity(showsPreview ? 1 : 0.5)
-                .accessibilityLabel(showsPreview ? "隐藏预览" : "显示预览")
 
                 PanelIconButton(
                     systemName: "trash",
@@ -454,12 +458,12 @@ struct HistoryPanelView: View {
                     .font(HisCopyStyle.font(HisCopyStyle.footnoteFontSize, .medium).monospacedDigit())
                     .foregroundStyle(.primary.opacity(0.5))
                     .lineLimit(1)
-                Text("收藏免于自动清理 · 1–9 快速粘贴")
+                Text("空格预览 · 1–9 快速粘贴")
                     .font(HisCopyStyle.font(9.5))
                     .foregroundStyle(.primary.opacity(HisCopyStyle.textTertiary))
                     .lineLimit(1)
             }
-            .help("收藏条目不计入自动清理；清空仍会删除全部。按 1–9 直接粘贴对应条目原文。")
+            .help("空格打开/关闭侧边预览；1–9 直接粘贴对应条目原文。收藏条目不计入自动清理。")
             .accessibilityLabel("历史 \(store.items.count) 条，约 \(ClipboardHistoryStore.formatByteCount(store.approximateTotalBytes))")
 
             Spacer(minLength: 8)
@@ -583,7 +587,7 @@ private struct HistoryRow: View {
 }
 
 
-/// Key monitor so ↑/↓ (and numpad 8/2) / 1–9 work without clicking the list.
+/// Key monitor so ↑/↓ (and numpad 8/2) / 1–9 / Space work without clicking the list.
 /// Local + global: docked hotkey open no longer makes the berth key (v0.8.4).
 @MainActor
 private final class PanelListArrowKeyMonitor: ObservableObject {
@@ -623,6 +627,13 @@ private final class PanelListArrowKeyMonitor: ObservableObject {
         }
 
         guard chord.isEmpty else { return event }
+
+        // Space (kVK_Space = 49): toggle side peek. Ignore key-repeat.
+        if event.keyCode == 49 {
+            if event.isARepeat { return swallow ? nil : event }
+            NotificationCenter.default.post(name: .hisCopyPanelToggleSpacePreview, object: nil)
+            return swallow ? nil : event
+        }
 
         let delta: Int
         switch event.keyCode {
