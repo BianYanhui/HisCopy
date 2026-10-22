@@ -8,6 +8,8 @@
 
 **下载：** [最新 Release（HisCopy.zip）](https://github.com/BianYanhui/HisCopy/releases/latest) · 当前 **v0.8.9**
 
+**Windows：** 同仓库 [Releases](https://github.com/BianYanhui/HisCopy/releases) 下载 `HisCopy-Windows.zip`（Ctrl+Shift+V 呼出历史；说明见 [windows/README.md](windows/README.md)）。
+
 <p align="center">
   <img src="docs/media/panel-open.jpg" alt="HisCopy 历史面板" width="720">
 </p>
