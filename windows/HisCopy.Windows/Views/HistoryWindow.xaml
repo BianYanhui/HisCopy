@@ -1,0 +1,52 @@
+<Window x:Class="HisCopy.Windows.Views.HistoryWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="HisCopy"
+        Width="420" Height="560"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        Topmost="True"
+        ResizeMode="NoResize"
+        KeyDown="OnKeyDown"
+        Deactivated="OnDeactivated">
+  <Border CornerRadius="14" Background="{StaticResource PanelBg}"
+          BorderBrush="#33000000" BorderThickness="1"
+          Margin="8">
+    <Border.Effect>
+      <DropShadowEffect BlurRadius="24" ShadowDepth="4" Opacity="0.35" Direction="270"/>
+    </Border.Effect>
+    <Grid Margin="12">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="*"/>
+        <RowDefinition Height="Auto"/>
+      </Grid.RowDefinitions>
+
+      <DockPanel Grid.Row="0" Margin="4,0,4,8">
+        <TextBlock Text="HisCopy" FontSize="16" FontWeight="SemiBold"
+                   Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
+        <TextBlock DockPanel.Dock="Right" Text="Ctrl+Shift+V"
+                   FontSize="11" Foreground="{StaticResource TextSecondary}"
+                   VerticalAlignment="Center"/>
+      </DockPanel>
+
+      <TextBox x:Name="SearchBox" Grid.Row="1" Margin="0,0,0,8" Padding="8,6"
+               FontSize="13" Background="White" BorderBrush="#22000000"
+               TextChanged="OnSearchChanged"/>
+
+      <ListBox x:Name="List" Grid.Row="2"
+               BorderThickness="0" Background="Transparent"
+               ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+               MouseDoubleClick="OnListDoubleClick"
+               KeyDown="OnListKeyDown"
+               DisplayMemberPath="TextPreview"/>
+
+      <TextBlock Grid.Row="3" Margin="4,8,4,0"
+                 Text="Enter 粘贴 · Ctrl+Enter 纯文本 · Esc 关闭 · Ctrl+F 搜索"
+                 FontSize="11" Foreground="{StaticResource TextSecondary}"/>
+    </Grid>
+  </Border>
+</Window>

@@ -1,0 +1,72 @@
+name: Build Windows
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'windows/**'
+      - '.github/workflows/build-windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build HisCopy (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish win-x64
+        working-directory: windows/HisCopy.Windows
+        run: |
+          dotnet publish -c Release -r win-x64 --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:EnableCompressionInSingleFile=true `
+            -o publish
+
+      - name: Pack zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path windows/HisCopy.Windows/publish/HisCopy.exe -DestinationPath dist/HisCopy-Windows.zip -Force
+          Get-Item dist/HisCopy-Windows.zip | Format-List Name, Length
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HisCopy-Windows.zip
+          path: dist/HisCopy-Windows.zip
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Wait briefly if macOS job is creating the release concurrently
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+              break
+            fi
+            echo "Release not ready yet, attempt $i…"
+            sleep 15
+          done
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/HisCopy-Windows.zip --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/HisCopy-Windows.zip \
+              --title "HisCopy $GITHUB_REF_NAME" \
+              --notes "Includes HisCopy-Windows.zip (Ctrl+Shift+V clipboard history)."
+          fi

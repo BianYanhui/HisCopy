@@ -1,0 +1,12 @@
+<Application x:Class="HisCopy.Windows.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ShutdownMode="OnExplicitShutdown">
+  <Application.Resources>
+    <SolidColorBrush x:Key="PanelBg" Color="#F2F2F7"/>
+    <SolidColorBrush x:Key="RowHover" Color="#E5E5EA"/>
+    <SolidColorBrush x:Key="Accent" Color="#007AFF"/>
+    <SolidColorBrush x:Key="TextPrimary" Color="#1C1C1E"/>
+    <SolidColorBrush x:Key="TextSecondary" Color="#8E8E93"/>
+  </Application.Resources>
+</Application>
