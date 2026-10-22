@@ -1,4 +1,5 @@
 using System.Windows;
+using HisCopy.Windows.Models;
 using HisCopy.Windows.Services;
 using HisCopy.Windows.Views;
 using Application = System.Windows.Application;
